@@ -44,6 +44,11 @@ Studio to work on the app.
 - **Tabs and panes** — switch, rename and reorder terminals, preview split
   layouts, split right or below, and dock or float panes. Optional minimized
   floating panes sit in an icon dock.
+- **Automatic pane takeover** — opening a pane takes control and resizes its
+  terminal to fit your screen, letting terminal applications reflow their text.
+- **Kitty graphics** — display terminal images through libghostty, including
+  PNG/RGB/RGBA images, transparency and animation. Images restore with the
+  terminal snapshot when reconnecting.
 - **Touch terminal controls** — arrow joystick, precise navigation popup,
   Ctrl shortcuts, function keys and customizable Neovim shortcuts in a wheel
   or grid.
