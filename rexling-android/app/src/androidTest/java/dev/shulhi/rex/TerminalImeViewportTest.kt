@@ -36,6 +36,36 @@ class TerminalImeViewportTest {
                 (0 until rows).map {y->TerminalCell(0,y,"line $y",-1,0,0,1)})
         }
     }
+    @Test fun paneControlHandoffDoesNotChangeTheKeyboardHeight() {
+        lateinit var outgoing: TerminalView;lateinit var incoming: TerminalView
+        ui.setContent {Row(Modifier.fillMaxSize()) {
+            AndroidView(factory={TerminalView(it).also {v->outgoing=v;v.controlled=true}},modifier=Modifier.weight(1f).fillMaxHeight())
+            AndroidView(factory={TerminalView(it).also {v->incoming=v}},modifier=Modifier.weight(1f).fillMaxHeight())
+        }}
+        ui.runOnIdle {outgoing.keyboard()}
+        ui.waitUntil(7000) {ViewCompat.getRootWindowInsets(outgoing)?.isVisible(WindowInsetsCompat.Type.ime())==true}
+        android.os.SystemClock.sleep(1200)
+        val heights=mutableListOf<Int>();var sampling=true
+        val sampler=object: android.view.Choreographer.FrameCallback {
+            override fun doFrame(time: Long) {
+                heights+=ViewCompat.getRootWindowInsets(outgoing)?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
+                if(sampling) android.view.Choreographer.getInstance().postFrameCallback(this)
+            }
+        }
+        try {
+            ui.runOnIdle {android.view.Choreographer.getInstance().postFrameCallback(sampler);outgoing.controlled=false}
+            // Include the real navigation gap before the next pane is acknowledged.
+            android.os.SystemClock.sleep(250)
+            ui.runOnIdle {incoming.controlled=true;incoming.requestFocus()}
+            android.os.SystemClock.sleep(700)
+            ui.runOnIdle {
+                sampling=false;android.view.Choreographer.getInstance().removeFrameCallback(sampler)
+                assertTrue("Sample the keyboard throughout the handoff",heights.size>10)
+                assertTrue("Gboard must keep its layout while transferring pane focus: $heights",heights.min()>0 && heights.max()-heights.min()<=2)
+                assertTrue(incoming.hasFocus())
+            }
+        } finally {ui.runOnIdle {sampling=false;android.view.Choreographer.getInstance().removeFrameCallback(sampler);incoming.hideKeyboard()}}
+    }
     @Test fun keyboardAnimationKeepsTheGridAndCachedRowsStable() {
         var covered by mutableIntStateOf(0);var legacy by mutableStateOf(true)
         val dimensions=mutableListOf<Pair<Int,Int>>();lateinit var view: TerminalView

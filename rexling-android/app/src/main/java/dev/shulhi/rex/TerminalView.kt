@@ -105,7 +105,7 @@ class TerminalView(context: Context) : View(context) {
     }
     var keyboardSuggestions: Boolean = true
         set(value) {
-            if(field!=value) {field=value;(context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(this)}
+            if(field!=value) {field=value;if(controlled && hasFocus()) (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(this)}
         }
     var controlled: Boolean = false
         set(value) {
@@ -113,7 +113,10 @@ class TerminalView(context: Context) : View(context) {
                 field = value
                 if (!value) {composing="";imeEditable?.clear();imeEditable=null}
                 selectionMode?.invalidate()
-                (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(this)
+                // Losing control invalidates active() immediately. Restarting the old
+                // editor here makes Gboard show a fallback layout during pane handoff.
+                // The incoming focused editor supplies its own connection instead.
+                if(value && hasFocus()) (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(this)
             }
         }
     var textSp: Float = 10f

@@ -1,0 +1,14 @@
+{
+  "build": 126,
+  "lint_release": "passed",
+  "jvm_tests": 177,
+  "jvm_skipped": 1,
+  "phone_tests_passed": 13,
+  "coverage": [
+    "Keyboard inset height remains constant throughout control loss, delayed acknowledgement, and focus transfer",
+    "Real Gboard suggestion taps",
+    "Terminal viewport grid stability during keyboard transitions",
+    "Input correction, composition, dictation and stale connection rejection"
+  ],
+  "phone_model": "SM-S906E"
+}
