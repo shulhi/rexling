@@ -63,3 +63,25 @@ This uses ThreadMXBean on the build JDK and includes test-loop overhead. It is
 an allocation/work check, not a phone latency or frame-pacing benchmark. Normal
 unit runs skip it. Device fade/gesture/link/cache regressions include
 PaneCompositingTest, PaneChromeTest, TerminalLinksTest and PaneFramesTest.
+
+### Kitty video responsiveness (Android)
+
+Use `-PrenderBench=true` and install the debug and androidTest APKs **only** as
+`dev.shulhi.rex.renderbench` and its test package. `KittyVideoPerfTest#changing720p`
+reports per-stage p50/p95 milliseconds for 60 changing 1280×720 opaque assets
+after 12 warmups. It uses a software Canvas, not a display FPS counter.
+
+For live navigation, use an isolated Rex server and an Android-reachable endpoint.
+Create two tabs in one scratch session: one running a finite `mpv --no-config
+--no-audio --vo=kitty --vo-kitty-width=1280 --vo-kitty-height=720 --frames=1100
+av://lavfi:testsrc2=size=1280x720:rate=30`, another printing `VIDEO_SWITCH_OK` and
+remaining open. Run the following while mpv is still playing. The test draws eight
+distinct live image assets on the main thread, requests a block switch there,
+and requires the target tab's terminal text within two seconds. This measures
+command-to-decoded-content latency, not a tap-to-display or network FPS benchmark.
+
+```sh
+adb shell am instrument -w -r -e class 'dev.shulhi.rex.KittyVideoPerfTest#switchAwayDuringLiveVideo' \
+  -e video_server "$endpoint" -e video_session "$session" -e video_block "$video" -e text_block "$text" \
+  dev.shulhi.rex.renderbench.test/androidx.test.runner.AndroidJUnitRunner
+```

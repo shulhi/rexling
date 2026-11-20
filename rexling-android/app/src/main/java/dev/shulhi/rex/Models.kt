@@ -12,7 +12,8 @@ data class TerminalScroll(val total: Long=0,val offset: Long=0,val visible: Long
     val below: Long get()=(available-offset).coerceAtLeast(0)
 }
 data class TerminalCell(val x: Int, val y: Int, val text: String, val foreground: Int, val background: Int, val attributes: Int, val width: Int, val hyperlink: String?=null)
-class TerminalImage(val id: Long,val generation: Long,val width: Int,val height: Int,val rgba: ByteArray)
+/** The decoder owns construction. A frame and its placement-only deltas share the bitmap. */
+class TerminalImage(val id: Long,val generation: Long,val width: Int,val height: Int,val bitmap: android.graphics.Bitmap?)
 data class TerminalImagePlacement(val image: TerminalImage,val layer: Int,val z: Int,val col: Int,val row: Int,
     val offsetX: Int,val offsetY: Int,val width: Int,val height: Int,val sourceX: Int,val sourceY: Int,val sourceWidth: Int,val sourceHeight: Int)
 data class TerminalScreen(val columns: Int, val rows: Int, val cursorX: Int?, val cursorY: Int?, val foreground: Int, val background: Int, val cells: List<TerminalCell>, val scroll: TerminalScroll = TerminalScroll(), val lines: List<List<TerminalCell>> = cells.groupBy {it.y}.let {groups->List(rows){groups[it].orEmpty()}}, val inputFlags: Int=0,val images: List<TerminalImagePlacement> = emptyList(),val imageCellWidth: Int=8,val imageCellHeight: Int=16,val above: List<List<TerminalCell>> = emptyList(),val below: List<List<TerminalCell>> = emptyList(),val cursorStyle: Int=1,val cursorBlinking: Boolean=false,val cursorAnchorX: Int?=null,val cursorAnchorY: Int?=null) {

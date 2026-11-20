@@ -14,6 +14,7 @@ import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class KittyGraphicsTest {
+    private fun pixelImage(id: Long,g: Long,w: Int,h: Int,data: ByteArray)=decodeTerminalImage(id,g,w,h,java.nio.ByteBuffer.wrap(data))
     private val instrumentation=InstrumentationRegistry.getInstrumentation()
     private fun fixture(name: String)=instrumentation.context.assets.open("kitty_$name.rxt").use {it.readBytes()}
     @Test fun nativePacketsKeepImagesAcrossDeltasAndPanePreviewsAndRemoveDeletedImages() {
@@ -73,16 +74,16 @@ class KittyGraphicsTest {
     }
     private fun hasColor(bitmap: Bitmap,color: Int): Boolean=(0 until bitmap.height).any {y->(0 until bitmap.width).any {x->bitmap.getPixel(x,y)==color}}
     @Test fun imagesRespectBackgroundTextLayersAlphaAndSourceCropping() {
-        val green=TerminalImage(1,1,1,1,byteArrayOf(0,-1,0,-1))
+        val green=pixelImage(1,1,1,1,byteArrayOf(0,-1,0,-1))
         val cells=listOf(TerminalCell(0,0,"",Color.WHITE,Color.RED,0,1),TerminalCell(1,0,"█",Color.WHITE,Color.BLACK,0,1))
         fun screen(layer: Int,image: TerminalImage=green,sx: Int=0,sw: Int=1)=TerminalScreen(4,2,null,null,Color.WHITE,Color.BLACK,cells,
             images=listOf(TerminalImagePlacement(image,layer,0,0,0,0,0,32,16,sx,0,sw,1)))
         val below=render(screen(0));assertTrue(hasColor(below,Color.RED));assertTrue(hasColor(below,Color.GREEN));below.recycle()
         val middle=render(screen(1));assertFalse(hasColor(middle,Color.RED));assertTrue(hasColor(middle,Color.WHITE));middle.recycle()
         val above=render(screen(2));assertFalse(hasColor(above,Color.WHITE));assertTrue(hasColor(above,Color.GREEN));above.recycle()
-        val pair=TerminalImage(2,1,2,1,byteArrayOf(-1,0,0,-1,0,-1,0,-1))
+        val pair=pixelImage(2,1,2,1,byteArrayOf(-1,0,0,-1,0,-1,0,-1))
         val cropped=render(screen(2,pair,1,1));assertFalse(hasColor(cropped,Color.RED));assertTrue(hasColor(cropped,Color.GREEN));cropped.recycle()
-        val transparent=TerminalImage(3,1,1,1,byteArrayOf(0,0,-1,-128))
+        val transparent=pixelImage(3,1,1,1,byteArrayOf(0,0,-1,-128))
         val alpha=render(screen(1,transparent));assertTrue((0 until alpha.height).any {y->(0 until alpha.width/4).any {x->
             val color=alpha.getPixel(x,y);Color.red(color) in 120..135 && Color.blue(color) in 120..135
         }});alpha.recycle()

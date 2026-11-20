@@ -883,7 +883,7 @@ Private JNI packets now use `RXT4`, retaining RXT3's header, input flags, change
 
 Unchanged pixels reuse the delivered delta base. Full frames include every referenced image; changed placements are sent even when no text row changed. Missing assets, invalid crops and oversized data reject a packet without committing the decoder revision. After the selected frame section, every RXT4 packet carries u16 preview count, each with a UTF-8 pane ID and a complete frame section; image-bearing previews no longer use JSON/base64. The decoder accepts historical RXT1–RXT3. JSON polling remains a text/activity diagnostic path.
 
-Android draws images below cell backgrounds, between backgrounds/text or above text in z order, clipped to terminal content. Image-free terminals retain the existing row cache. Image bitmaps are cached by owned image identity, so IDs reused in another pane/server cannot display old pixels. Cropping, pixel-to-cell scaling and alpha are applied during Canvas rendering; snapshots retain pixels for disconnected/cached pane views.
+Android draws images below cell backgrounds, between backgrounds/text or above text in z order, clipped to terminal content. Image-free terminals retain the existing row cache. The IO packet decoder prepares one Bitmap per new image asset; placement-only deltas share that object, and a reused ID in another pane/server cannot display old pixels. Opaque RGBA uploads use a bulk copy; Android premultiplies translucent colors on the conversion path. Drawing does not allocate pixel arrays or retain a second per-view bitmap cache. Cropping, pixel-to-cell scaling and alpha are applied during Canvas rendering; snapshots retain pixels for disconnected/cached pane views.
 
 ## TCP forwarding (API 14)
 

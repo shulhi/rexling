@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /** State is decoder-local: row deltas never cross a connection or an unknown base. */
-internal class TerminalUpdates {
+internal class TerminalUpdates(private val imageDecoder: (Long,Long,Int,Int,ByteBuffer)->TerminalImage = ::decodeTerminalImage) {
     var revision: Long=0;private set
     private var state=AppState()
     fun decode(bytes: ByteArray): AppState {
@@ -92,7 +92,8 @@ internal class TerminalUpdates {
                         require(w in 1..8192 && h in 1..8192 && n.toLong()==w.toLong()*h*4 && n<=data.remaining())
                         total+=n;require(total<=64*1024*1024)
                         val key=Pair(id,generation);require(newKeys.add(key))
-                        val bytes=ByteArray(n);data.get(bytes);images[key]=TerminalImage(id,generation,w,h,bytes)
+                        images[key]=imageDecoder(id,generation,w,h,data)
+                        data.position(data.position()+n)
                     }
                     val count=data.short.toInt() and 0xffff;require(count<=4096)
                     placements=List(count) {
