@@ -11,6 +11,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+MACHINES = {"arm64-v8a": "AArch64", "x86_64": "X86-64"}
 
 
 def main():
@@ -43,10 +44,12 @@ def main():
         for name in archive.namelist():
             if name.startswith("assets/dexopt/"):profiles.append({"name":name,"bytes":archive.getinfo(name).file_size})
             if not name.startswith("lib/") or not name.endswith(".so"): continue
-            assert name.startswith("lib/arm64-v8a/"), name
-            path = Path(temporary) / Path(name).name
+            abi = name.split("/")[1]
+            assert abi in MACHINES, name
+            path = Path(temporary) / abi / Path(name).name
+            path.parent.mkdir(exist_ok=True)
             path.write_bytes(archive.read(name))
-            assert "AArch64" in run([tools / "llvm-readelf", "-h", path]), name
+            assert MACHINES[abi] in run([tools / "llvm-readelf", "-h", path]), name
             headers = run([tools / "llvm-readelf", "-lW", path])
             alignments = [int(line.split()[-1], 16) for line in headers.splitlines() if line.strip().startswith("LOAD ")]
             assert alignments and all(value >= 16384 for value in alignments), (name, alignments)
@@ -55,9 +58,11 @@ def main():
                 assert all(symbol in symbols for symbol in expected), "missing JNI export"
             assert archive.getinfo(name).compress_type == zipfile.ZIP_STORED, name
             libraries.append({"name": name, "bytes": path.stat().st_size, "load_alignment": min(alignments)})
-    assert any(item["name"].endswith("librex_android.so") for item in libraries)
-    assert any(item["name"].endswith("libc++_shared.so") for item in libraries)
-    assert any(item["name"].endswith("librex_network.so") for item in libraries)
+    abis = {item["name"].split("/")[1] for item in libraries}
+    assert "arm64-v8a" in abis, abis
+    for abi in abis:
+        for library in ["librex_android.so", "libc++_shared.so", "librex_network.so"]:
+            assert f"lib/{abi}/{library}" in {item["name"] for item in libraries}, (abi, library)
     manifest = run([sdk / "cmdline-tools/latest/bin/apkanalyzer", "manifest", "print", apk])
     assert 'package="dev.shulhi.rex"' in manifest
     debuggable='android:debuggable="true"' in manifest

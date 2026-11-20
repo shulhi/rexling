@@ -3,7 +3,7 @@
 Run commands below from the `rexling/` repository root unless noted otherwise.
 Android builds use macOS or x86_64 Linux (the Linux NDK toolchain is x86_64).
 The verified local environment is Apple Silicon macOS with Android Studio's JDK 25. The APK targets
-arm64-v8a Android 9/API 28 or newer; other Android ABIs are not built yet.
+arm64-v8a Android 9/API 28 or newer; x86_64 is an opt-in ABI for emulators.
 
 ## Prerequisites
 
@@ -61,6 +61,13 @@ This builds the release and copies it to
 with a matching `.apk.sha256` file. Version, build code and commit match About.
 Tracked local edits add `-modified` after the commit; source archives use `unknown`.
 The standard Gradle output remains available at `app-release.apk`.
+
+To also run on an x86_64 emulator, add the x86_64 ABI (it needs
+`rustup target add x86_64-linux-android`). Release defaults stay arm64-only:
+
+```sh
+./rexling-android/scripts/gradle.sh :app:assembleDebug -Prexling.abis=arm64-v8a,x86_64
+```
 
 The visible app version uses the build's UTC date (`YYYY.MM.DD`). **⋮ → Preferences → About
 Rexling** shows that version, Android's numeric build code, build type and Git
