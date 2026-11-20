@@ -71,20 +71,24 @@ internal class RexConnection(application: Application, private val scope: Corout
     private var displayedTarget=""
     private var boundTarget=""
     private var boundView: java.lang.ref.WeakReference<TerminalView>?=null
+    private val keystrokes=KeystrokeLatencyLog.tracker()
     private val displayFrames by lazy {LatestDisplayFrame<DisplayFrame>(AndroidDisplayFrameClock()) {frame->
         queuedScreen=null;queuedTarget=""
         if(!closed && foreground && visible && !navigationRequest.pending && frame.target==frameTarget(state.value)) {
             android.os.Trace.beginSection("Rexlink.present.${frame.token}")
             try {
                 displayedTarget=frame.target;displayedToken=frame.token
-                if(boundTarget==frame.target) boundView?.get()?.let {view->if(view.isAttachedToWindow) view.presentFrame(frame.screen,frame.token)}
+                if(boundTarget==frame.target) boundView?.get()?.let {view->if(view.isAttachedToWindow) {
+                    view.presentFrame(frame.screen,frame.token)
+                    KeystrokeLatency.revisionOf(frame.token)?.let(keystrokes::presented)
+                }}
                 mutableTerminal.value=frame.screen
                 mutableDisplayLayout.value=TerminalDisplayLayout(frame.target,true,frame.screen.columns,frame.screen.rows,frame.screen.scroll.below>0)
             } finally {android.os.Trace.endSection()}
         }
     }}
     private fun frameTarget(value: AppState)="${value.endpoint}:${value.connectionEpoch}:${value.navigationId}:${value.selectedSession}:${value.selectedBlock}"
-    private fun cancelDisplay() {displayFrames.clear();queuedScreen=null;queuedTarget="";boundView=null;boundTarget=""}
+    private fun cancelDisplay() {keystrokes.reset();displayFrames.clear();queuedScreen=null;queuedTarget="";boundView=null;boundTarget=""}
     private fun queueDisplay(next: AppState) {
         val target=frameTarget(next)
         if(next.screen==null || (displayedTarget.isNotEmpty() && displayedTarget!=target)) {
@@ -105,6 +109,7 @@ internal class RexConnection(application: Application, private val scope: Corout
         val current=state.value
         val live=current.selectedBlock.ifBlank {if(current.phase=="preview") "preview" else ""}
         if(block!=live) return false
+        view.onFrameDrawn={token->KeystrokeLatency.revisionOf(token)?.let(keystrokes::drawn)}
         view.onSemanticCopy={frame,col,row,output->
             val active=state.value
             if(!visible || !foreground || navigationRequest.pending || active.selectedBlock!=block) false
@@ -196,6 +201,7 @@ internal class RexConnection(application: Application, private val scope: Corout
             command("activity_seen","items" to seen)
             pollJob = scope.launch(Dispatchers.IO) {
                 val decoder=TerminalUpdates()
+                var lastScreen: TerminalScreen?=null
                 while (!closed) {
                     if (!foreground) { delay(500); continue }
                     val update=NativeBridge.awaitUpdate(handle,decoder.revision,250)
@@ -204,6 +210,11 @@ internal class RexConnection(application: Application, private val scope: Corout
                         try {
                             android.os.Trace.beginSection("Rexlet.decodeUpdate")
                             val next=try {decoder.decode(NativeBridge.readUpdate(handle,decoder.revision))} finally {android.os.Trace.endSection()}
+                            // Only visible change can be an echo. Some updates carry a new but identical
+                            // screen (queueDisplay skips those too), so compare content, and only while a
+                            // keystroke is waiting for its echo.
+                            if(keystrokes.awaitingEcho() && next.screen!=lastScreen) keystrokes.decoded(next.revision)
+                            lastScreen=next.screen
                             android.os.Trace.beginSection("Rexlink.ready.$handle.${next.revision}");android.os.Trace.endSection()
                             withContext(Dispatchers.Main.immediate) {
                                 navigationRequest = navigationRequest.acknowledge(next)
@@ -213,7 +224,7 @@ internal class RexConnection(application: Application, private val scope: Corout
                                 val old=state.value
                                 if(old.selectedSession!=next.selectedSession) presentation.flush()
                                 if(old.connectionEpoch!=next.connectionEpoch) {
-                                    activation.resume();cancelKeyRepeats();resetModifiers()
+                                    keystrokes.reset();activation.resume();cancelKeyRepeats();resetModifiers()
                                     navigationRequest=NavigationRequest();restoreWorkspace=true
                                 }
                                 android.os.Trace.beginSection("Rexlink.previewCache")
@@ -488,10 +499,12 @@ internal class RexConnection(application: Application, private val scope: Corout
     }
     fun type(text: String) {
         if (!visible || !state.value.controlled || state.value.creating || navigationRequest.pending || text.isEmpty()) return
+        val keystroke=keystrokes.start()
         flushImeComposition()
         val input = TerminalInput.modified(text, controlModifier, altModifier, shiftModifier)
         controlModifier = false; altModifier = false;shiftState=shiftState.consume();keyboardRequest=""
-        command("input", "text" to input,"session" to state.value.selectedSession,"block" to state.value.selectedBlock,"navigationId" to state.value.navigationId,"connectionEpoch" to state.value.connectionEpoch)
+        if(command("input", "text" to input,"session" to state.value.selectedSession,"block" to state.value.selectedBlock,"navigationId" to state.value.navigationId,"connectionEpoch" to state.value.connectionEpoch))
+            keystrokes.sent(keystroke) else keystrokes.cancel(keystroke)
     }
     fun scrollPrompt(direction: Int) {
         val current=state.value

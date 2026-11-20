@@ -19,9 +19,15 @@ internal class TerminalScrollMotion {
         target=next
         return (next-from).toInt()
     }
+    /** Whether the last [slide] wanted to move further than the overscan rows allow. */
+    var clamped=false
+        private set
     fun slide(scroll: TerminalScroll,height: Float,above: Int,below: Int,active: Boolean): Float {
         var pending=target?.let {it-scroll.offset} ?: 0L
         if(!active && (pending==0L || kotlin.math.abs(pending)>maxOf(above,below)+2)) {target=null;pending=0}
-        return (pending*height+remainder).coerceIn(-above*height,below*height)
+        val wanted=pending*height+remainder
+        val shown=wanted.coerceIn(-above*height,below*height)
+        clamped=shown!=wanted
+        return shown
     }
 }

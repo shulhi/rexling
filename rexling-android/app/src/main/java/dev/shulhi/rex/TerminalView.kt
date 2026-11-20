@@ -89,6 +89,7 @@ class TerminalView(context: Context) : View(context) {
     var onWheel: (Int,Int,Int,Int,Int) -> Unit = {lines,_,_,_,_->onScroll(lines)}
     var onActivate: () -> Unit = {}
     var onMouseClick: (Int,Int,Int,Int) -> Unit = {_,_,_,_->}
+    internal var onFrameDrawn: ((String)->Unit)?=null
     internal var onSemanticCopy: ((TerminalScreen,Int,Int,Boolean)->Boolean)?=null
     internal var onCursorTap: ()->Unit = {}
     var mouseTarget: ()->String={""}
@@ -165,6 +166,9 @@ class TerminalView(context: Context) : View(context) {
      * the overscan rows at the edges.
      */
     private val scrollMotion=TerminalScrollMotion()
+    private var slideClamped=false
+    private val scrollMetrics=ScrollMetrics(System::nanoTime,
+        {(1_000_000_000.0/(display?.refreshRate?.takeIf {it>0f} ?: 60f)).toLong()},ScrollMetricsLog::record)
     private var recordedOffset: Long?=null
     private var suppressScrollTap=false
     private val linkIndex=TerminalLinks.Index()
@@ -343,6 +347,8 @@ class TerminalView(context: Context) : View(context) {
         canvas.restoreToCount(saved)
         if(token!=null) android.os.Trace.endSection()
         android.os.Trace.endSection()
+        if(token!=null) onFrameDrawn?.invoke(token)
+        if(scrollMetrics.isActive) scrollMetrics.drawn(frame.scroll.offset,slideClamped)
     }
     /** Rows compare by content only; a row that moved is the same drawing. */
     private fun sameCells(a: List<TerminalCell>,b: List<TerminalCell>): Boolean {
@@ -446,7 +452,7 @@ class TerminalView(context: Context) : View(context) {
             if(lines!=0) {scrollPixels-=lines*cellHeight;onWheel(lines,wheelCol,wheelRow,desiredCellWidth.roundToInt(),desiredCellHeight.roundToInt())}
         } else {
             val lines=scrollMotion.drag(pixels,frame.scroll,cellHeight)
-            if(lines!=0) onScroll(lines)
+            if(lines!=0) {scrollMotion.target?.let {scrollMetrics.requested(it-lines,it)};onScroll(lines)}
             invalidate()
         }
     }
@@ -454,8 +460,9 @@ class TerminalView(context: Context) : View(context) {
     private fun slideFor(frame: TerminalScreen): Float {
         // Image placements outside the viewport are not yet available. Keep their
         // existing whole-row rendering rather than expose an incomplete image edge.
-        if(selection!=null || frame.images.isNotEmpty()) return 0f
+        if(selection!=null || frame.images.isNotEmpty()) {slideClamped=false;return 0f}
         return scrollMotion.slide(frame.scroll,cellHeight,frame.above.size,frame.below.size,scrolling || !scrollFling.isFinished)
+            .also {slideClamped=scrollMotion.clamped}
     }
     override fun computeScroll() {
         if(scrollFling.computeScrollOffset()) {
@@ -466,6 +473,7 @@ class TerminalView(context: Context) : View(context) {
     }
     /** At rest the grid snaps to whole lines; lines still in flight finish sliding in. */
     private fun settleScroll() {
+        scrollMetrics.flingFinished();scrollMetrics.end()
         if(scrollMotion.remainder!=0f || scrollPixels!=0f) {scrollPixels=0f;scrollMotion.settle();invalidate()}
     }
     override fun onDetachedFromWindow() {removeCallbacks(cursorTick);awake.detach();terminalImages.clear();clearRows();clearSelection();scrollFling.abortAnimation();touchVelocity?.recycle();touchVelocity=null;super.onDetachedFromWindow()}
@@ -542,12 +550,15 @@ class TerminalView(context: Context) : View(context) {
                     val slop=ViewConfiguration.get(context).scaledTouchSlop
                     if(kotlin.math.abs(dx)>slop || kotlin.math.abs(dy)>slop) removeCallbacks(longPress)
                     if(!scrolling && kotlin.math.abs(dx)>slop && kotlin.math.abs(dx)>kotlin.math.abs(dy)*1.5f) dragging=true
-                    if(!dragging && kotlin.math.abs(dy)>slop && kotlin.math.abs(dy)>kotlin.math.abs(dx)*1.5f) {scrolling=true;paneGesture.cancel()}
-                    if(scrolling) {scrollByPixels(lastScrollY-event.rawY);lastScrollY=event.rawY}
+                    if(!dragging && kotlin.math.abs(dy)>slop && kotlin.math.abs(dy)>kotlin.math.abs(dx)*1.5f) {
+                        if(!scrolling) {scrollMetrics.begin();ScrollMetricsLog.begin()}
+                        scrolling=true;paneGesture.cancel()
+                    }
+                    if(scrolling) {scrollMetrics.touchMoved(event.eventTime*1_000_000);scrollByPixels(lastScrollY-event.rawY);lastScrollY=event.rawY}
                     else if(dragging) onPaneDrag?.invoke(dx,true)
                 }
             }
-            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> {scrollFling.abortAnimation();scrollMotion.reset();invalidate();pressedLink=null;removeCallbacks(longPress);paneGesture.cancel();onPaneDrag?.invoke(0f,false);dragging=false;scrolling=false}
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> {scrollMetrics.end();scrollFling.abortAnimation();scrollMotion.reset();invalidate();pressedLink=null;removeCallbacks(longPress);paneGesture.cancel();onPaneDrag?.invoke(0f,false);dragging=false;scrolling=false}
             MotionEvent.ACTION_UP -> if(scrolling) {
                 touchVelocity?.computeCurrentVelocity(1000)
                 val velocity=-(touchVelocity?.yVelocity ?: 0f).toInt()
@@ -556,6 +567,8 @@ class TerminalView(context: Context) : View(context) {
                     val minimum=-(history.offset.toDouble()*cellHeight).coerceAtMost(1000000.0).toInt()
                     val maximum=(history.below.toDouble()*cellHeight).coerceAtMost(1000000.0).toInt()
                     lastFlingY=0;scrollFling.fling(0,0,0,velocity,0,0,minimum,maximum);postInvalidateOnAnimation()
+                    // Metrics only: a release below fling speed ends the gesture as a drag.
+                    if(kotlin.math.abs(velocity)>=ViewConfiguration.get(context).scaledMinimumFlingVelocity) scrollMetrics.flingStarted() else scrollMetrics.end()
                 } else settleScroll()
                 scrolling=false;paneGesture.cancel()
             } else if(dragging && onPaneDragEnd!=null) {
