@@ -321,6 +321,14 @@ collide. Only the original Rex session ID is sent to that host. The header and
 search picker flatten connected hosts in saved order; disconnected hosts are
 omitted. Long-press history can return to a session on another host.
 
+Switching tabs or panes inside a session keeps the claim on the pane being left.
+Giving it up let another attached client apply its own size, and returning then
+resized the pane again, so programs that redraw on resize (Claude Code, Neovim)
+repainted their whole screen on every visit. The engine tracks the panes the
+server reports as owned by this client and gives them all up when the session
+changes, the app is hidden or paused, or the connection drops. Release in the
+terminal menu gives up only the pane on screen.
+
 Switching the visible host releases the old block claim, keeps its sockets and
 terminal state, and blocks stale hidden-view input/resize callbacks. Hidden
 hosts continue polling at a lower cadence. Foreground/background lifecycle

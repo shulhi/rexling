@@ -240,6 +240,9 @@ struct Actor {
     tab_move_id: u64,
     pane_move_id: u64,
     controlled: bool,
+    /// Panes of the selected session this client owns, as the server last reported. They stay
+    /// claimed while the session is on screen, so returning to one neither resizes nor redraws it.
+    held: BTreeSet<String>,
     theme: Option<Value>,
     creating: bool,
     paused: bool,
@@ -307,6 +310,7 @@ impl Actor {
             tab_move_id: 0,
             pane_move_id: 0,
             controlled: false,
+            held: BTreeSet::new(),
             theme: None,
             creating: false,
             paused: false,
@@ -556,6 +560,7 @@ impl Actor {
         self.close_retained_floating().await;
         self.commands.clear();self.input_acks.clear();
         self.connect_task=None;self.other_owner=false;
+        self.held.clear(); // the server drops a client's claims with its connection
         self.preview_task = None;
         self.summary_task = None;
         self.activity_task=None;
@@ -580,6 +585,7 @@ impl Actor {
         self.progress_reports.clear();self.activity_dirty=true;
         self.commands.clear();self.input_acks.clear();
         self.connect_task=None;self.other_owner=false;
+        self.held.clear(); // the server drops a client's claims with its connection
         self.preview_task = None;
         self.summary_task = None;
         self.activity_task=None;
@@ -669,6 +675,7 @@ impl Actor {
             .unwrap_or("");
         let mut windows = Vec::new();
         let mut selected_exists = false;
+        let mut held = BTreeSet::new();
         for window in view["windows"].as_array().into_iter().flatten() {
             let mut blocks = Vec::new();
             let mut layout=Vec::new();
@@ -682,6 +689,7 @@ impl Actor {
                         continue;
                     }
                     let id = block["block_id"].as_str().unwrap_or("");
+                    if !client.is_empty() && block["owner"].as_str() == Some(client) {held.insert(id.to_owned());}
                     if id == self.selected_block {
                         selected_exists = true;
                         self.controlled = block["owner"].as_str() == Some(client);
@@ -722,6 +730,7 @@ impl Actor {
         let before=self.progress_reports.len();
         self.progress_reports.retain(|_,r|r["session"]!=self.selected_session || r["block"].as_str().is_some_and(|id|live.contains(id)));
         if self.progress_reports.len()!=before {self.activity_dirty=true;}
+        self.held = held;
         if !self.selected_block.is_empty() && !selected_exists {
             self.data = None;
             self.data_resume = None;
@@ -1355,6 +1364,7 @@ impl Actor {
                 if let Some(c) = &mut self.control {
                     c.call("session.disown_block",json!({"session_id":self.selected_session,"block_ids":[self.selected_block]})).await?;
                 }
+                self.held.remove(&self.selected_block);
                 self.controlled = false;self.other_owner=false;
                 self.notice = "Viewing terminal".into();
                 self.publish();
@@ -1526,7 +1536,8 @@ impl Actor {
     }
     async fn open_block(&mut self, block: String) -> Result<()> {
         ensure!(!self.selected_session.is_empty(), "Choose a session first");
-        self.release_selected().await?;
+        // The pane being left stays claimed. Giving it up let another client resize it, and coming
+        // back then resized it again, so full-screen programs redrew their whole screen on each visit.
         let restored=if self.retained_floating.as_ref().is_some_and(|p|p.block==block) {
             self.retained_floating.take()
         } else {None};
@@ -1607,17 +1618,25 @@ impl Actor {
         }
         Ok(())
     }
+    /// Gives up every pane held in the selected session: the one on screen and those visited before it.
     async fn release_selected(&mut self) -> Result<()> {
+        let mut others=std::mem::take(&mut self.held);
+        others.remove(&self.selected_block);
         if !self.selected_session.is_empty()
-            && !self.selected_block.is_empty()
             && let Some(control) = self.control.as_mut()
         {
-            control
-                .call(
-                    "session.disown_block",
-                    json!({"session_id":self.selected_session,"block_ids":[self.selected_block]}),
-                )
-                .await?;
+            if !self.selected_block.is_empty() {
+                control
+                    .call(
+                        "session.disown_block",
+                        json!({"session_id":self.selected_session,"block_ids":[self.selected_block]}),
+                    )
+                    .await?;
+            }
+            // Best effort, one by one: a pane closed since the last view must not keep the rest claimed.
+            for block in others {
+                let _=control.call("session.disown_block",json!({"session_id":self.selected_session,"block_ids":[block]})).await;
+            }
         }
         self.controlled = false;
         Ok(())
