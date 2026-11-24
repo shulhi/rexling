@@ -20,6 +20,11 @@ fun gitOutput(vararg args: String): String = runCatching {
 }.getOrDefault("")
 val revision=gitOutput("rev-parse","--short=10","HEAD").takeIf {it.matches(Regex("[0-9a-f]{7,40}"))} ?: "unknown"
 val modified=gitOutput("status","--porcelain","--untracked-files=no").isNotBlank()
+// Android ABIs to build, e.g. -Prexling.abis=arm64-v8a,x86_64 for an x86_64 emulator.
+val supportedAbis=setOf("arm64-v8a","x86_64")
+val abis=(providers.gradleProperty("rexling.abis").orNull ?: "arm64-v8a").split(",").map {it.trim()}.filter {it.isNotEmpty()}.distinct()
+require(abis.isNotEmpty() && abis.all {it in supportedAbis}) {"rexling.abis must list ABIs from $supportedAbis"}
+val abiTag=abis.joinToString("+") {if(it=="arm64-v8a") "arm64" else it}
 
 android {
     namespace = "dev.shulhi.rex"
@@ -34,7 +39,7 @@ android {
         buildConfigField("String","GIT_REVISION","\"$revision\"")
         buildConfigField("boolean","LOCAL_CHANGES",modified.toString())
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        ndk { abiFilters += "arm64-v8a" }
+        ndk { abiFilters += abis }
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions {
@@ -91,12 +96,13 @@ dependencies {
 }
 val buildRust by tasks.registering(Exec::class) {
     workingDir(rootProject.projectDir)
-    commandLine("python3", "scripts/build_native.py")
+    commandLine(listOf("python3", "scripts/build_native.py")+abis.flatMap {listOf("--abi",it)})
     inputs.files(rootProject.fileTree("../rexling-core") { exclude("**/target/**", "**/.build/**") })
     inputs.files(rootProject.fileTree("../rexling-network") { include("*.go", "go.mod", "go.sum") })
     inputs.file(rootProject.file("../rexling-core/scripts/build_native.py"))
     inputs.file(rootProject.file("scripts/build_native.py"))
-    outputs.dir(project.file("src/main/jniLibs/arm64-v8a"))
+    inputs.property("abis",abis)
+    abis.forEach {outputs.dir(project.file("src/main/jniLibs/$it"))}
 }
 tasks.named("preBuild").configure { dependsOn(buildRust) }
 
@@ -105,7 +111,7 @@ tasks.register("shareRelease") {
     group="distribution"
     description="Build a release APK named with its version, build code and source revision."
     dependsOn("assembleRelease")
-    val name="Rexling-$dateVersion-build${android.defaultConfig.versionCode}-$revision${if(modified) "-modified" else ""}-arm64-release.apk"
+    val name="Rexling-$dateVersion-build${android.defaultConfig.versionCode}-$revision${if(modified) "-modified" else ""}-$abiTag-release.apk"
     val source=layout.buildDirectory.file("outputs/apk/release/app-release.apk")
     val target=rootProject.layout.projectDirectory.file("dist/$name")
     val checksum=rootProject.layout.projectDirectory.file("dist/$name.sha256")
