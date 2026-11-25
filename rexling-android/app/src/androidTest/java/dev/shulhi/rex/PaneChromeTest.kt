@@ -1,5 +1,6 @@
 package dev.shulhi.rex
 
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toPixelMap
@@ -19,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
@@ -295,11 +297,19 @@ class PaneChromeTest {
             File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir,"side-tabs-$mode.png")
                 .outputStream().use {bitmap.compress(Bitmap.CompressFormat.PNG,100,it)}
         }
+        fun tabIconInset(): Float {
+            val row=ui.onNodeWithContentDescription("Tab PDF preview, Codex",substring=true).fetchSemanticsNode().boundsInRoot
+            val icon=ui.onNodeWithTag("Tab program icon tab",useUnmergedTree=true).fetchSemanticsNode().boundsInRoot
+            return icon.left-row.left
+        }
         check(172.dp,"titles")
+        val expandedIconInset=tabIconInset()
         val collapse=ui.onNodeWithContentDescription("Show icons only")
         val expandedToggle=collapse.fetchSemanticsNode().boundsInRoot
         collapse.performClick()
         check(52.dp,"icons")
+        assertEquals("The tab icon should keep the same distance from the marker",
+            expandedIconInset,tabIconInset(),.5f)
         val expand=ui.onNodeWithContentDescription("Show tab titles")
         val collapsedToggle=expand.fetchSemanticsNode().boundsInRoot
         assertEquals(expandedToggle,collapsedToggle)
@@ -358,6 +368,7 @@ class PaneChromeTest {
         var windowWidth by mutableIntStateOf(800)
         var overlap by mutableIntStateOf(0)
         var side by mutableStateOf(TabBarPosition.LEFT)
+        var windowOrientation by mutableIntStateOf(Configuration.ORIENTATION_LANDSCAPE)
         var current by mutableStateOf(localSession.key)
         val selectedSessions=mutableListOf<String>()
         ui.setContent {MaterialTheme {
@@ -370,10 +381,13 @@ class PaneChromeTest {
                         current=it
                     }) {}
             }
-            Row(Modifier.size(360.dp,420.dp).underWorkspaceHeader {overlap}) {
-                if(side==TabBarPosition.LEFT) rail()
-                Box(Modifier.weight(1f).fillMaxSize().testTag("Terminal area"))
-                if(side==TabBarPosition.RIGHT) rail()
+            val configuration=Configuration(LocalConfiguration.current).apply {orientation=windowOrientation}
+            CompositionLocalProvider(LocalConfiguration provides configuration) {
+                Row(Modifier.size(360.dp,420.dp).underWorkspaceHeader {overlap}) {
+                    if(side==TabBarPosition.LEFT) rail()
+                    Box(Modifier.weight(1f).fillMaxSize().testTag("Terminal area"))
+                    if(side==TabBarPosition.RIGHT) rail()
+                }
             }
         }}
         val tabs=ui.onNodeWithText("Tabs")
@@ -447,5 +461,42 @@ class PaneChromeTest {
         assertEquals(bounds(tabsList).center.x,bounds(expand).center.x,1f)
         expand.performClick()
         assertEquals(rightToggle,bounds(collapse))
+
+        ui.runOnIdle {windowOrientation=Configuration.ORIENTATION_PORTRAIT}
+        val portraitSwitcher=bounds(tabs)
+        assertTrue(bounds(activeTab).bottom<=portraitSwitcher.top)
+        assertTrue(bounds(tabsList).bottom-bounds(activeTab).bottom<=with(ui.density) {4.dp.toPx()})
+        assertTrue(portraitSwitcher.bottom<=bounds(collapse).top)
+        assertEquals(rightToggle,bounds(collapse))
+        val portraitExpandedTop=bounds(activeTab).top
+        val portraitExpandedBottom=bounds(tabsList).bottom
+        ui.mainClock.autoAdvance=false
+        collapse.performClick()
+        ui.mainClock.advanceTimeBy(96)
+        val portraitMovingTop=bounds(activeTab).top
+        val portraitMovingBottom=bounds(tabsList).bottom
+        assertEquals(rightToggle,bounds(expand))
+        ui.mainClock.advanceTimeBy(1000)
+        val portraitCollapsedTop=bounds(activeTab).top
+        val portraitCollapsedBottom=bounds(tabsList).bottom
+        assertTrue("The tabs should move with the switcher as it closes. " +
+            "Tab top $portraitExpandedTop → $portraitMovingTop → $portraitCollapsedTop. " +
+            "List bottom $portraitExpandedBottom → $portraitMovingBottom → $portraitCollapsedBottom.",
+            portraitMovingTop>portraitExpandedTop && portraitMovingTop<portraitCollapsedTop)
+        expand.performClick()
+        ui.mainClock.advanceTimeBy(96)
+        val portraitOpeningTop=bounds(activeTab).top
+        assertTrue("The tabs should follow the switcher as it opens",
+            portraitOpeningTop<portraitCollapsedTop && portraitOpeningTop>portraitExpandedTop)
+        ui.mainClock.advanceTimeBy(1000)
+        ui.mainClock.autoAdvance=true
+        assertEquals(portraitSwitcher,bounds(tabs))
+        sessions.performClick().assertIsSelected()
+        val sessionsList=ui.onNodeWithContentDescription("Sessions by server")
+        assertTrue(bounds(sessionsList).bottom<=bounds(sessions).top)
+        assertEquals(portraitSwitcher,bounds(tabs))
+        ui.runOnIdle {windowOrientation=Configuration.ORIENTATION_LANDSCAPE}
+        sessions.assertIsSelected()
+        assertTrue(bounds(sessions).bottom<=bounds(sessionsList).top)
     }
 }

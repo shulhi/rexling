@@ -1,8 +1,15 @@
 package dev.shulhi.rex
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.updateTransition
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -94,6 +101,8 @@ internal enum class TabWidthClass(val title: String,val range: String,val key: S
 internal data class TabRailSessions(val targets: List<SessionTarget>,val current: String,val onSelect: (String)->Unit)
 private val sidebarTextSize=11.sp
 private val sidebarLineHeight=14.sp
+private val sidebarTabIconInset=10.5.dp
+private const val sidebarTransitionMillis=180
 
 /** A vertical tab list beside the terminal; [actions] (switcher, Activity, keyboard) sit at its foot. */
 @OptIn(ExperimentalFoundationApi::class)
@@ -107,12 +116,18 @@ private val sidebarLineHeight=14.sp
     actions: @Composable ()->Unit) {
     val titles=style==TabRailStyle.TITLES
     val wideSessions=sessions.takeIf {titles && TabWidthClass.of(windowWidthDp)==TabWidthClass.WIDE}
-    val tabsAtTop=wideSessions!=null
-    var showSessions by rememberSaveable(tabsAtTop) {mutableStateOf(false)}
+    val portrait=currentPaneOrientation()==PaneOrientation.PORTRAIT
+    val tabsAtTop=wideSessions!=null && !portrait
+    var showSessions by rememberSaveable(wideSessions!=null) {mutableStateOf(false)}
+    val switcherTransition=updateTransition(wideSessions!=null,label="Sidebar switcher")
+    // In portrait the viewport already animates. Let its bottom-aligned tabs follow
+    // that motion directly, without adding a second placement spring.
+    val tabsFollowSwitcher=portrait && (switcherTransition.isRunning ||
+        switcherTransition.currentState!=switcherTransition.targetState)
     // Swipe across the rail toward the terminal to show titles, back toward the screen edge to hide them.
     // Resizes are debounced, so the animated width sends the pane only its final size.
     val width by androidx.compose.animation.core.animateDpAsState(tabRailWidth(style,windowWidthDp),
-        androidx.compose.animation.core.tween(180),label="Tab rail width")
+        tween(sidebarTransitionMillis),label="Tab rail width")
     val tabAlignment=animateFloatAsState(if(tabsAtTop) 0f else 1f,
         spring(dampingRatio=.82f,stiffness=Spring.StiffnessMediumLow),label="Tab rail alignment")
     val tabSpacing=4.dp
@@ -145,6 +160,28 @@ private val sidebarLineHeight=14.sp
     LaunchedEffect(selectedId,reorderKey,index,newTabItems,newTabClearance,showSessions) {
         if(index>=0 && !showSessions) list.animateScrollToItem(index+newTabItems,scrollOffset=-newTabClearance)
     }
+    val pageSwitcher: @Composable ()->Unit={
+        val edge=if(portrait) Alignment.Bottom else Alignment.Top
+        switcherTransition.AnimatedVisibility(visible={it},
+            enter=expandVertically(tween(sidebarTransitionMillis),expandFrom=edge)+fadeIn(tween(120,delayMillis=32)),
+            exit=shrinkVertically(tween(sidebarTransitionMillis),shrinkTowards=edge)+fadeOut(tween(110))) {
+            Row(Modifier.fillMaxWidth().padding(horizontal=8.dp,vertical=2.dp)
+                .background(scheme.surfaceVariant.copy(alpha=.45f),RoundedCornerShape(12.dp))
+                .padding(2.dp).selectableGroup()) {
+                for(sessionsTab in listOf(false,true)) {
+                    val active=showSessions==sessionsTab
+                    Box(Modifier.weight(1f).heightIn(min=36.dp)
+                        .background(if(active) scheme.primaryContainer else Color.Transparent,RoundedCornerShape(9.dp))
+                        .selectable(active,enabled=wideSessions!=null,role=Role.Tab,onClick={showSessions=sessionsTab}),
+                        contentAlignment=Alignment.Center) {
+                        Text(if(sessionsTab) "Sessions" else "Tabs",fontSize=sidebarTextSize,lineHeight=sidebarLineHeight,
+                            fontWeight=if(active) FontWeight.SemiBold else FontWeight.Normal,
+                            color=if(active) scheme.onPrimaryContainer else scheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
     Column(Modifier.fillMaxHeight().width(width).background(scheme.surface)
         .drawWithContent {
             drawContent()
@@ -170,32 +207,17 @@ private val sidebarLineHeight=14.sp
             })
         .semantics {customActions=listOf(CustomAccessibilityAction(if(titles) "Show icons only" else "Show tab titles") {
             onStyle(if(titles) TabRailStyle.ICONS else TabRailStyle.TITLES);true})}
-        .then(if(tabsAtTop) Modifier.layout {measurable,constraints->
-            // The workspace draws beneath the compact header. Keep the sidebar controls below it.
+        .then(if(wideSessions!=null) Modifier.layout {measurable,constraints->
+            // Keep the expanded sidebar's scrollable lists below the compact header.
             val inset=headerOverlap().coerceIn(0,constraints.maxHeight)
             val content=measurable.measure(constraints.offset(vertical=-inset))
             layout(content.width,content.height+inset) {content.placeRelative(0,inset)}
         } else Modifier)
         .padding(vertical=4.dp),horizontalAlignment=Alignment.CenterHorizontally) {
-        if(wideSessions!=null) {
-            Row(Modifier.fillMaxWidth().padding(horizontal=8.dp,vertical=2.dp)
-                .background(scheme.surfaceVariant.copy(alpha=.45f),RoundedCornerShape(12.dp))
-                .padding(2.dp).selectableGroup()) {
-                for(sessionsTab in listOf(false,true)) {
-                    val active=showSessions==sessionsTab
-                    Box(Modifier.weight(1f).heightIn(min=36.dp)
-                        .background(if(active) scheme.primaryContainer else Color.Transparent,RoundedCornerShape(9.dp))
-                        .selectable(active,role=Role.Tab,onClick={showSessions=sessionsTab}),
-                        contentAlignment=Alignment.Center) {
-                        Text(if(sessionsTab) "Sessions" else "Tabs",fontSize=sidebarTextSize,lineHeight=sidebarLineHeight,
-                            fontWeight=if(active) FontWeight.SemiBold else FontWeight.Normal,
-                            color=if(active) scheme.onPrimaryContainer else scheme.onSurfaceVariant)
-                    }
-                }
-            }
-        }
+        if(!portrait) pageSwitcher()
         if(showSessions && wideSessions!=null) {
-            TabRailSessionList(wideSessions,Modifier.weight(1f).fillMaxWidth()) {key->
+            TabRailSessionList(wideSessions,Modifier.weight(1f).fillMaxWidth(),
+                alignment=if(tabsAtTop) Alignment.Top else Alignment.Bottom) {key->
                 showSessions=false
                 wideSessions.onSelect(key)
             }
@@ -204,7 +226,8 @@ private val sidebarLineHeight=14.sp
             verticalArrangement=tabArrangement) {
             // Lay out the button with the tabs so their placement can animate as the rail resizes.
             if(!tabsAtTop && onNewTab!=null) stickyHeader(key=0) {
-                Box(Modifier.fillMaxWidth().animateItem(fadeInSpec=null,fadeOutSpec=null).background(scheme.surface),
+                val placement=if(tabsFollowSwitcher) Modifier else Modifier.animateItem(fadeInSpec=null,fadeOutSpec=null)
+                Box(Modifier.fillMaxWidth().then(placement).background(scheme.surface),
                     contentAlignment=Alignment.Center) {
                     ChromeButton(ChromeIcon.ADD,"New tab",enabled=enabled,onClick=onNewTab)
                 }
@@ -227,7 +250,8 @@ private val sidebarLineHeight=14.sp
                 val indicator=terminalProgressColor(progress)
                 val breathe=active && animateWorking && if(progress!=null) progress.busy && progress.percent==null else busy
                 val workPhase=rememberWorkingPhase(breathe)
-                Box(Modifier.animateItem(fadeInSpec=null,fadeOutSpec=null)) {
+                val placement=if(tabsFollowSwitcher) Modifier else Modifier.animateItem(fadeInSpec=null,fadeOutSpec=null)
+                Box(placement) {
                     Row(Modifier.fillMaxWidth().height(if(titles) 44.dp else 48.dp)
                         .background(if(active) scheme.surfaceVariant else Color.Transparent)
                         .drawWithContent {
@@ -252,8 +276,8 @@ private val sidebarLineHeight=14.sp
                         }
                         .combinedClickable(enabled=enabled,role=Role.Tab,onLongClickLabel="Tab options",
                             onLongClick={menuId=w.id},onClick={onSelect(w.id)})
-                        .padding(start=if(titles) 14.dp else 5.dp,end=if(titles) 10.dp else 0.dp),
-                        verticalAlignment=Alignment.CenterVertically,horizontalArrangement=if(titles) Arrangement.spacedBy(4.dp) else Arrangement.Center) {
+                        .padding(start=sidebarTabIconInset,end=if(titles) 10.dp else 0.dp),
+                        verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp)) {
                         Box(Modifier.semantics {testTag="Tab program icon ${w.id}"},contentAlignment=Alignment.Center) {
                             ProgramStack(programs,pane,fixedSlot=true)
                             if(unread>0) {
@@ -280,6 +304,7 @@ private val sidebarLineHeight=14.sp
                     modifier=Modifier.animateItem(fadeInSpec=null,fadeOutSpec=null).padding(start=14.dp),onClick=onNewTab)
             }
         }
+        if(portrait) pageSwitcher()
         HorizontalDivider(Modifier.padding(horizontal=9.dp,vertical=4.dp),thickness=.5.dp,color=divider)
         val atStart=side==TabBarPosition.LEFT
         val atLeftEdge=atStart==(LocalLayoutDirection.current==LayoutDirection.Ltr)
@@ -310,11 +335,11 @@ private val sidebarLineHeight=14.sp
     }
 }
 
-@Composable private fun TabRailSessionList(sessions: TabRailSessions,modifier: Modifier,onSelect: (String)->Unit) {
+@Composable private fun TabRailSessionList(sessions: TabRailSessions,modifier: Modifier,alignment: Alignment.Vertical,onSelect: (String)->Unit) {
     val groups=remember(sessions.targets,sessions.current) {SessionCatalog.groups(sessions.targets,sessions.current,"")}
     val scheme=MaterialTheme.colorScheme
     LazyColumn(modifier.semantics {contentDescription="Sessions by server"},contentPadding=PaddingValues(8.dp),
-        verticalArrangement=Arrangement.spacedBy(4.dp)) {
+        verticalArrangement=Arrangement.spacedBy(4.dp,alignment)) {
         if(groups.isEmpty()) item {
             Text("No sessions available",Modifier.padding(8.dp),fontSize=sidebarTextSize,lineHeight=sidebarLineHeight,
                 color=scheme.onSurfaceVariant)
