@@ -3,7 +3,7 @@ use anyhow::Result;
 use rex_core::{
     control::{Control, Trace},
     data::Data,
-    ghostty::{Frame, Replica},
+    ghostty::{Frame, Replica, Terminal},
     transport::{Endpoint, TERMINAL},
 };
 use serde_json::{Value, json};
@@ -138,6 +138,31 @@ impl Mirror {
 
     pub fn wants(&self, session: &str, block: &str) -> bool {
         self.session == session && self.slots.iter().any(|slot| slot.want.block == block)
+    }
+
+    fn ready_pane(&mut self, block: &str) -> Option<&mut Live> {
+        self.slots.iter_mut().find(|slot| slot.want.block == block)?
+            .live.as_mut().filter(|live| live.replica.ready())
+    }
+
+    pub fn scroll(&mut self, block: &str, lines: Option<i32>) -> Result<()> {
+        if let Some(live) = self.ready_pane(block) {
+            let terminal = live.replica.terminal()?;
+            match lines {
+                Some(lines) => terminal.scroll_viewport(lines),
+                None => terminal.scroll_to_bottom(),
+            }
+            live.dirty = true;
+        }
+        Ok(())
+    }
+
+    pub fn owned_terminal(&mut self, block: &str) -> Result<Option<&mut Terminal>> {
+        self.slots.iter_mut().find(|slot| slot.want.block == block && slot.owned)
+            .and_then(|slot| slot.live.as_mut())
+            .filter(|live| live.replica.ready())
+            .map(|live| live.replica.terminal())
+            .transpose()
     }
 
     /// A pending ticket can be dropped. Once the data handshake starts, finish it so

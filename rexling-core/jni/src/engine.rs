@@ -3,7 +3,7 @@ use anyhow::{Context, Result, ensure};
 use rex_core::{
     control::{Control, Trace},
     data::{Data, Resume},
-    ghostty::{Frame, Replica},
+    ghostty::{Frame, Replica, Terminal},
     transport::Endpoint,
 };
 use serde_json::{Value, json};
@@ -103,6 +103,29 @@ fn input_event(paste:bool,text:&str)->Value {
     // ESC[13;2u with the kitty protocol, ESC[27;2;13~ otherwise.
     else if text==SHIFT_ENTER {json!({"type":"key","payload":{"key":"enter","mods":"shift","consumed_mods":"","text":"","unshifted_codepoint":13,"composing":false,"action":"press"}})}
     else {json!({"type":"key","payload":{"key":"unidentified","mods":"","consumed_mods":"","text":text,"unshifted_codepoint":0,"composing":false,"action":"press"}})}
+}
+
+fn wheel_text(terminal: &mut Terminal, value: &Value, lines: i32) -> Result<Option<String>> {
+    let flags = terminal.input_flags()?;
+    let bytes = if flags & 1 != 0 {
+        terminal.wheel(lines > 0,
+            value["col"].as_i64().unwrap_or(0) as i32,
+            value["row"].as_i64().unwrap_or(0) as i32,
+            value["cw"].as_u64().unwrap_or(1).clamp(1, 1024) as u32,
+            value["ch"].as_u64().unwrap_or(1).clamp(1, 1024) as u32)?
+    } else if flags & 6 == 6 {
+        match (flags & 8 != 0, lines < 0) {
+            (true, true) => b"\x1bOA".to_vec(),
+            (true, false) => b"\x1bOB".to_vec(),
+            (false, true) => b"\x1b[A".to_vec(),
+            (false, false) => b"\x1b[B".to_vec(),
+        }
+    } else {
+        return Ok(None);
+    };
+    String::from_utf8(bytes.repeat(lines.unsigned_abs() as usize))
+        .map(Some)
+        .context("Legacy mouse coordinates cannot be sent as UTF-8 terminal input")
 }
 #[cfg(test)]
 mod shift_enter_tests {
@@ -1180,6 +1203,9 @@ impl Actor {
     }
     async fn send_input(&mut self,value:Value)->Result<()> {
         ensure!(!self.monitoring,"Background monitor is read-only");
+        if value["type"]=="wheel" && value["mirror"]==true {
+            return self.send_mirror_wheel(&value).await;
+        }
         let target=self.input_target();
         if !target.matches(&value) {return Ok(());}
         if value["type"]=="wheel" {
@@ -1215,6 +1241,39 @@ impl Actor {
         self.input_acks.push_back(InputAck {target,paste,reply:Box::pin(reply.receive())});
         Ok(())
     }
+    fn mirror_scroll_block<'a>(&self, value: &'a Value) -> Option<&'a str> {
+        let block = value["block"].as_str()?;
+        if !self.visible || self.paused || self.phase != "connected"
+            || value["session"] != self.selected_session || block == self.selected_block
+            || value["navigationId"].as_u64() != Some(self.navigation_id)
+            || value["connectionEpoch"].as_u64() != Some(self.connection_epoch)
+            || self.navigation_id < self.latest_navigation.load(Ordering::Acquire)
+            || !self.mirror.wants(&self.selected_session, block) {
+            return None;
+        }
+        let window = pane_window(&self.windows, &self.selected_block)?;
+        let zoomed = window["zoomed"].as_str().unwrap_or("");
+        (window["id"] == value["window"] && (zoomed.is_empty() || zoomed == block)).then_some(block)
+    }
+
+    async fn send_mirror_wheel(&mut self, value: &Value) -> Result<()> {
+        let Some(block) = self.mirror_scroll_block(value) else { return Ok(()); };
+        let lines = crate::input_queue::wheel_lines(value) as i32;
+        if lines == 0 || !self.owned_blocks.contains(block) {
+            return Ok(());
+        }
+        let Some(terminal) = self.mirror.owned_terminal(block)? else { return Ok(()); };
+        match wheel_text(terminal, value, lines)? {
+            Some(text) if !text.is_empty() => {
+                let mut target = self.input_target();
+                target.block = block.to_owned();
+                self.start_input(target, false, &text).await
+            }
+            None => self.mirror.scroll(block, Some(lines)),
+            _ => Ok(()),
+        }
+    }
+
     async fn send_wheel(&mut self,value:&Value,target:Target)->Result<()> {
         if !self.visible || self.paused || self.phase!="connected"
             || target.navigation<self.latest_navigation.load(Ordering::Acquire) {return Ok(());}
@@ -1222,19 +1281,12 @@ impl Actor {
         if lines==0 {return Ok(());}
         let Some(replica)=self.replica.as_mut().filter(|r|r.ready()) else{return Ok(());};
         let terminal=replica.terminal()?;
-        let flags=terminal.input_flags()?;
-        let bytes=if flags&1!=0 {
-            terminal.wheel(lines>0,value["col"].as_i64().unwrap_or(0) as i32,value["row"].as_i64().unwrap_or(0) as i32,
-                value["cw"].as_u64().unwrap_or(1).clamp(1,1024) as u32,value["ch"].as_u64().unwrap_or(1).clamp(1,1024) as u32)?
-        } else if flags&6==6 {
-            match (flags&8!=0,lines<0) {(true,true)=>b"\x1bOA".to_vec(),(true,false)=>b"\x1bOB".to_vec(),(false,true)=>b"\x1b[A".to_vec(),(false,false)=>b"\x1b[B".to_vec()}
-        } else {
+        let Some(text)=wheel_text(terminal,value,lines)? else {
             terminal.scroll_viewport(lines);
             self.dirty=true;
             return Ok(());
         };
-        if bytes.is_empty(){return Ok(());}
-        let text=String::from_utf8(bytes.repeat(lines.unsigned_abs() as usize)).context("Legacy mouse coordinates cannot be sent as UTF-8 terminal input")?;
+        if text.is_empty(){return Ok(());}
         if !self.controlled {
             self.take_selected().await?;
             if target!=self.input_target() || target.navigation<self.latest_navigation.load(Ordering::Acquire) {return Ok(());}
@@ -1753,17 +1805,21 @@ impl Actor {
                 }
             }
             "scroll" => {
+                let lines = (value["bottom"] != true).then(|| value["lines"].as_i64().unwrap_or(0).clamp(-100000, 100000) as i32);
+                if value["mirror"] == true {
+                    if let Some(block) = self.mirror_scroll_block(&value) {
+                        self.mirror.scroll(block, lines)?;
+                    }
+                    return Ok(());
+                }
                 if value["block"].as_str() != Some(self.selected_block.as_str()) {
                     return Ok(());
                 }
                 if let Some(replica) = self.replica.as_mut().filter(|r| r.ready()) {
                     let terminal = replica.terminal()?;
-                    if value["bottom"] == true {
-                        terminal.scroll_to_bottom();
-                    } else {
-                        terminal.scroll_viewport(
-                            value["lines"].as_i64().unwrap_or(0).clamp(-100000, 100000) as i32,
-                        );
+                    match lines {
+                        Some(lines) => terminal.scroll_viewport(lines),
+                        None => terminal.scroll_to_bottom(),
                     }
                     self.dirty = true;
                 }
@@ -2749,7 +2805,10 @@ mod tests {
         }
     }
     fn text(state: &Value) -> String {
-        state["screen"]["cells"]
+        frame_text(&state["screen"])
+    }
+    fn frame_text(frame: &Value) -> String {
+        frame["cells"]
             .as_array()
             .into_iter()
             .flatten()
@@ -3559,7 +3618,7 @@ while True:
 
     #[test]
     #[ignore = "requires an explicitly supplied owned server with python3"]
-    fn live_full_screen_wheel_scrolls_without_terminal_history() {
+    fn live_wheel_and_scrollback_scroll_the_requested_pane() {
         let endpoint=std::env::var("REX_TEST_SERVER").expect("set REX_TEST_SERVER");
         let runtime=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let mut writer=runtime.block_on(Control::connect(Endpoint::new(&endpoint,Duration::from_secs(10)).unwrap(),None,Trace::default())).unwrap();
@@ -3582,9 +3641,18 @@ while True:
   os.write(1,('\x1b[H\x1b[2JSCROLL_POSITION:'+str(position)).encode())
  if len(buffer)>4096: buffer=buffer[-64:]
 "###;
+        let mouse_pane=json!({"block":{"flavor":"com.superlogical.terminal.shell","options":{"shell":"none","command":["/usr/bin/python3","-u","-c",script]}}});
+        let history_pane=json!({"block":{"flavor":"com.superlogical.terminal.shell","options":{"shell":"none",
+            "command":["/bin/sh","-c","i=0; while [ \"$i\" -lt 120 ]; do printf 'HISTORY_%03d\\n' \"$i\"; i=$((i+1)); done; exec cat"]}}});
         let created=runtime.block_on(writer.call("session.create",json!({"label":format!("rexlink-wheel-test-{}",std::process::id()),
-            "initial_windows":[{"layout":{"block":{"flavor":"com.superlogical.terminal.shell","options":{"shell":"none","command":["/usr/bin/python3","-u","-c",script]}}}}]}))).unwrap();
-        let id=created["session_id"].as_str().unwrap();let block=created["initial_windows"][0]["block_ids"][0].as_str().unwrap();
+            "initial_windows":[{"layout":{"split":{"direction":"horizontal","before":mouse_pane,"after":{
+                "split":{"direction":"vertical","before":history_pane,"after":mouse_pane}}}}}]}))).unwrap();
+        let id=created["session_id"].as_str().unwrap();
+        let window=&created["initial_windows"][0]["window_id"];
+        let blocks=&created["initial_windows"][0]["block_ids"];
+        let block=blocks[0].as_str().unwrap();
+        let history=blocks[1].as_str().unwrap();
+        let mirror=blocks[2].as_str().unwrap();
         let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let app=Session::spawn().unwrap();app.command(json!({"type":"connect","server":endpoint})).unwrap();wait(&app,|v|v["phase"]=="connected");
             app.command(json!({"type":"session","id":id})).unwrap();wait(&app,|v|v["selectedSession"]==id);
@@ -3598,6 +3666,36 @@ while True:
             app.command(json!({"type":"wheel","session":id,"block":"stale","lines":-5})).unwrap();
             std::thread::sleep(Duration::from_millis(100));
             let state:Value=serde_json::from_str(&app.poll(0).unwrap()).unwrap();assert!(text(&state).contains("SCROLL_POSITION:-1"));
+
+            let history_request=json!({"block":history,"columns":40,"rows":20});
+            app.command(json!({"type":"mirror","session":id,"window":window,"panes":[history_request]})).unwrap();
+            let at_bottom=wait(&app,|v|frame_text(&v["previews"][history]).contains("HISTORY_119"));
+            let bottom=at_bottom["previews"][history]["scrollbar"][1].as_u64().unwrap();
+            assert!(bottom>4);
+            let mut scroll=json!({"type":"scroll","mirror":true,"session":id,"window":window,"block":history,
+                "navigationId":at_bottom["navigationId"],"connectionEpoch":at_bottom["connectionEpoch"],"lines":-4});
+            let mut stale=scroll.clone();
+            stale["window"]=json!("old-window");
+            app.command(stale).unwrap();
+            app.command(scroll.clone()).unwrap();
+            let scrolled=wait(&app,|v|v["previews"][history]["scrollbar"][1]==bottom-4);
+            assert_eq!(scrolled["selectedBlock"],block);
+            assert_eq!(scrolled["controlled"],true);
+            assert!(text(&scrolled).contains("SCROLL_POSITION:-1"));
+            scroll["bottom"]=json!(true);
+            app.command(scroll).unwrap();
+            wait(&app,|v|v["previews"][history]["scrollbar"][1]==bottom);
+
+            app.command(json!({"type":"mirror","session":id,"window":window,
+                "panes":[history_request,{"block":mirror,"columns":40,"rows":20}]})).unwrap();
+            let ready=wait(&app,|v|frame_text(&v["previews"][mirror]).contains("SCROLL_POSITION:0"));
+            app.command(json!({"type":"wheel","mirror":true,"session":id,"window":window,"block":mirror,
+                "navigationId":ready["navigationId"],"connectionEpoch":ready["connectionEpoch"],
+                "lines":-2,"col":4,"row":5,"cw":10,"ch":20})).unwrap();
+            let scrolled=wait(&app,|v|frame_text(&v["previews"][mirror]).contains("SCROLL_POSITION:-2"));
+            assert_eq!(scrolled["selectedBlock"],block);
+            assert_eq!(scrolled["controlled"],true);
+            assert!(text(&scrolled).contains("SCROLL_POSITION:-1"));
         }));
         runtime.block_on(writer.attach(id)).unwrap();runtime.block_on(writer.call("session.destroy",json!({"session_id":id}))).unwrap();runtime.block_on(writer.close()).unwrap();result.unwrap();
     }

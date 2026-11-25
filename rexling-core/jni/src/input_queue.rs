@@ -61,7 +61,7 @@ impl Commands {
             if let Some(queued) = self.items.back_mut()
                 && queued["type"] == "wheel"
                 && wheel_lines(queued).signum() == lines.signum()
-                && ["session", "block", "navigationId", "connectionEpoch", "col", "row", "cw", "ch", "columns", "rows"]
+                && ["session", "block", "navigationId", "connectionEpoch", "mirror", "window", "col", "row", "cw", "ch", "columns", "rows"]
                     .iter().all(|key| queued[key] == value[key])
             {
                 // Keep at most one batch of unsent motion for a continuous swipe.

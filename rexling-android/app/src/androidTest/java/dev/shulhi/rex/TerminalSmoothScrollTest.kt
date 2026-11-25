@@ -121,4 +121,39 @@ class TerminalSmoothScrollTest {
             assertEquals(1,wheel);assertEquals(0,local);assertEquals(0f,view.scrollTranslation,0f)
         }
     }
+
+    @Test fun inactivePaneScrollsAndASeparateTapFocusesIt() {
+        instrumentation.runOnMainSync {
+            val view=view().apply {controlled=false;interactive=false}
+            var focus=0;var local=0;var wheel=0
+            view.onFocusTap={focus++}
+            view.onActivate={error("An inactive tap must only focus its pane")}
+            view.onOpenLink={error("An inactive tap must only focus its pane")}
+            view.onScroll={local+=it}
+            view.onWheel={lines,_,_,_,_->wheel+=lines}
+
+            fun touch(action: Int,at: Long,y: Float,down: Long) {
+                val event=MotionEvent.obtain(down,at,action,5f,y,0)
+                try {assertTrue(view.onTouchEvent(event))} finally {event.recycle()}
+            }
+            fun drag(at: Long) {
+                val center=view.height/2f
+                touch(MotionEvent.ACTION_DOWN,at,center,at)
+                touch(MotionEvent.ACTION_MOVE,at+100,center+view.height/4f,at)
+                touch(MotionEvent.ACTION_UP,at+200,center+view.height/4f,at)
+            }
+            drag(100)
+            assertTrue(local<0)
+            assertEquals(0,focus)
+
+            view.screen=frame(180).copy(inputFlags=1)
+            drag(400)
+            assertTrue(wheel<0)
+            assertEquals(0,focus)
+
+            touch(MotionEvent.ACTION_DOWN,700,10f,700)
+            touch(MotionEvent.ACTION_UP,730,10f,700)
+            assertEquals(1,focus)
+        }
+    }
 }

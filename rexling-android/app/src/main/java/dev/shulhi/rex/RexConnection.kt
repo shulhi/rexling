@@ -553,6 +553,19 @@ internal class RexConnection(application: Application, private val scope: Corout
                 "navigationId" to current.navigationId,"connectionEpoch" to current.connectionEpoch,
                 "lines" to lines,"col" to col,"row" to row,"cw" to cw,"ch" to ch,"columns" to lastSize.first,"rows" to lastSize.second)
     }
+    private fun mirrorScrollTarget(session: String,window: String,block: String): AppState? {
+        val current=state.value
+        val request=mirrorRequest
+        return current.takeIf {visible && foreground && it.connected && !it.creating && !navigationRequest.pending &&
+            session==it.selectedSession && block!=it.selectedBlock &&
+            request.session==session && request.window==window && request.panes.any {pane->pane.block==block}}
+    }
+    internal fun wheelMirror(session: String,window: String,block: String,lines: Int,col: Int,row: Int,cw: Int,ch: Int) {
+        val current=mirrorScrollTarget(session,window,block) ?: return
+        command("wheel","mirror" to true,"session" to session,"window" to window,"block" to block,
+            "navigationId" to current.navigationId,"connectionEpoch" to current.connectionEpoch,
+            "lines" to lines,"col" to col,"row" to row,"cw" to cw,"ch" to ch)
+    }
     fun releaseControl() { activation.release();resizeJob?.cancel();cancelKeyRepeats();controlModifier = false; altModifier = false;shiftState=ShiftKeyState();keyboardRequest=""; if(state.value.selectedBlock.isNotBlank()) command("release") }
     fun pause() {
         presentation.flush()
@@ -596,6 +609,12 @@ internal class RexConnection(application: Application, private val scope: Corout
     }
     fun scroll(lines: Int) {if(!navigationRequest.pending && state.value.screen!=null) command("scroll","block" to state.value.selectedBlock,"lines" to lines)}
     fun scrollToBottom() {if(!navigationRequest.pending && state.value.screen!=null) command("scroll","block" to state.value.selectedBlock,"bottom" to true)}
+    internal fun scrollMirror(session: String,window: String,block: String,lines: Int,bottom: Boolean=false) {
+        val current=mirrorScrollTarget(session,window,block) ?: return
+        command("scroll","mirror" to true,"session" to session,"window" to window,"block" to block,
+            "navigationId" to current.navigationId,"connectionEpoch" to current.connectionEpoch,
+            "lines" to lines,"bottom" to bottom)
+    }
     fun key(name: String) = type(TerminalInput.key(name))
     fun paste(text: String) { if (visible && state.value.controlled && !navigationRequest.pending) {flushImeComposition();command("paste", "text" to text,"session" to state.value.selectedSession,"block" to state.value.selectedBlock,"navigationId" to state.value.navigationId,"connectionEpoch" to state.value.connectionEpoch)} }
     fun resize(columns: Int, rows: Int) {
