@@ -2,13 +2,17 @@ package dev.shulhi.rex
 
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.roundToInt
 
 internal data class TerminalKeyboardFocus(val top: Float,val cursorBottom: Float,val contentBottom: Float)
 
@@ -19,6 +23,8 @@ internal class TerminalImePanState {
     private var previousCoverage=-1
     private var previousOcclusion=-1
     private var offset=0
+    private var manualOffset by mutableStateOf<Float?>(null)
+
     fun position(focus: TerminalKeyboardFocus?,visibleHeight: Int,covered: Int,topOcclusion: Int=0): Int {
         if(focus!=null) lastFocus=focus
         if(visibleHeight!=previousHeight || covered!=previousCoverage || topOcclusion!=previousOcclusion) {
@@ -36,8 +42,21 @@ internal class TerminalImePanState {
                 else->offset
             }.coerceIn(-topOcclusion,covered)
         }
-        return offset
+        if(covered==0 && topOcclusion==0) followCursor()
+        return manualOffset?.coerceIn(-topOcclusion.toFloat(),offset.toFloat())?.roundToInt() ?: offset
     }
+
+    /** Move only the visible part of the pane and return any drag left for terminal scrollback. */
+    fun consumeDrag(pixels: Float): Float {
+        val top=-previousOcclusion.coerceAtLeast(0).toFloat()
+        val end=offset.toFloat()
+        val before=manualOffset?.coerceIn(top,end) ?: end
+        val after=(before+pixels).coerceIn(top,end)
+        if(after!=before) manualOffset=after.takeIf {it<end}
+        return pixels-(after-before)
+    }
+
+    fun followCursor() {manualOffset=null}
 }
 
 /** How much of the window bottom the keyboard covers above the navigation bar, in px. */
@@ -54,9 +73,10 @@ private fun androidx.compose.ui.unit.Density.keyboardCover(ime: WindowInsets,nav
  */
 @Composable
 internal fun Modifier.terminalImeViewport(ime: WindowInsets,navigation: WindowInsets,keyboardChrome: ()->Int={0},
-    extendsUnderNavigation: Boolean=false,headerHeightSaved: ()->Int={0},headerOverlap: ()->Int={0},focus: ()->TerminalKeyboardFocus?): Modifier {
+    extendsUnderNavigation: Boolean=false,headerHeightSaved: ()->Int={0},headerOverlap: ()->Int={0},
+    pan: TerminalImePanState=remember {TerminalImePanState()},focus: ()->TerminalKeyboardFocus?): Modifier {
     return stableTerminalViewport(coverage={keyboardCoverage(ime,navigation,keyboardChrome,extendsUnderNavigation,headerHeightSaved)},
-        topOcclusion={headerOverlap()},focus=focus)
+        topOcclusion={headerOverlap()},pan=pan,focus=focus)
 }
 
 internal fun androidx.compose.ui.unit.Density.keyboardCoverage(
@@ -69,8 +89,8 @@ internal fun androidx.compose.ui.unit.Density.keyboardCoverage(
 
 @Composable
 internal fun Modifier.stableTerminalViewport(panToCursor: Boolean=true,coverage: androidx.compose.ui.unit.Density.()->Int,
-    topOcclusion: androidx.compose.ui.unit.Density.()->Int={0},focus: ()->TerminalKeyboardFocus?): Modifier {
-    val pan=remember(panToCursor) {TerminalImePanState()}
+    topOcclusion: androidx.compose.ui.unit.Density.()->Int={0},pan: TerminalImePanState=remember(panToCursor) {TerminalImePanState()},
+    focus: ()->TerminalKeyboardFocus?): Modifier {
     return layout {measurable,constraints->
         if(!constraints.hasBoundedHeight) {
             val child=measurable.measure(constraints)

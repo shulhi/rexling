@@ -284,6 +284,19 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
     }
     var dockFloatingPane by remember(displayedSession,window?.id) {mutableStateOf<String?>(null)}
     val controlled=state.controlled && ready && client.hasScreen
+    fun showKeyboard() {if(!controlled) client.takeControl() else terminalView?.keyboard()}
+    fun toggleKeyboard() {if(controlled && keyboardVisible) terminalView?.hideKeyboard() else showKeyboard()}
+    val keyboardAction: (@Composable ()->Unit)?=when {
+        tabLayout.side -> ({
+            TerminalKeyboardButton(controlled,ready,keyboardVisible,readable=state.connected,inputKey=keyTarget,
+                onPaste={pasteClipboard()},onClick=::toggleKeyboard)
+        })
+        toolbarHidden -> ({
+            ChromeButton(ChromeIcon.KEYBOARD,if(controlled) "Show keyboard" else "Take control and show keyboard",
+                enabled=state.connected && state.selectedSession.isNotBlank(),onClick=::showKeyboard)
+        })
+        else -> null
+    }
     val paneObscured=menu || model.activityVisible || picker.isNotEmpty() || preferencesOpen || networkSettings || sshKeysSettings || servers || addServer || forwards || newSession || appearance || about || neovimSettings || toolbarSettings || controlSettings || alerts || fontPicker || closeTarget!=null || dockFloatingPane!=null
     val zoomed=window?.zoomed.orEmpty()
     val activityPaneIds=remember(chosen,tiles,floatingOverlay,zoomed) {activityPaneCandidates(chosen,tiles,floatingOverlay,zoomed)}
@@ -418,8 +431,7 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
                     val tabActions: @Composable (Boolean)->Unit={vertical->
                         TerminalActions(state.connected && state.selectedSession.isNotBlank(),model.connectedCount>0,
                             {model.showActivity(true)},{picker="tabs"},attentionCount=activityBadges.elsewhere,
-                            keyboardLabel=if(!controlled) "Take control and show keyboard" else "Show keyboard",
-                            onKeyboard=if(toolbarHidden) ({if(!controlled) client.takeControl() else terminalView?.keyboard()}) else null,vertical=vertical)
+                            vertical=vertical,keyboard=keyboardAction)
                     }
                     val tabRail: @Composable ()->Unit={
                         TerminalTabRail(windows,activeWindowId,state.connected&&!state.creating&&!changingSession,client::selectWindow,client::tabPrograms,client::tabPaneIndex,
@@ -540,9 +552,8 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
                         WorkspaceBottomBar(model,client,state,windows,activeWindowId,displayedSession,
                             tabLayout.side,extendUnderNav,changingSession,!workspaceBackdrop,activityBadges.tabs,
                             controlled,ready,keyboardVisible,keyTarget,toolbarHeight,
-                            onCloseTab={closeTarget=closeTabTarget(it)},onPaste=::pasteClipboard,onKeyboard={
-                                if(!controlled) client.takeControl() else if(keyboardVisible) terminalView?.hideKeyboard() else terminalView?.keyboard()
-                            },actions={tabActions(false)})
+                            onCloseTab={closeTarget=closeTabTarget(it)},onPaste=::pasteClipboard,onKeyboard=::toggleKeyboard,
+                            actions={tabActions(false)})
                     }
                 }
                 model.images.state?.let {status->ImageUploadOverlay(status,model.images::retry,model.images::cancel,
@@ -718,7 +729,8 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
                     {client.keyForTarget(it,keyTarget)},readable=state.connected,onControlShortcut={client.controlShortcut(it,keyTarget)},
                     inputKey=keyTarget,shortcutGesture=model.shortcutGesture,arrowJoystickEnabled=model.arrowJoystickEnabled,onPaste={onPaste()},
                     onPrompt=if(client.hasSemanticPrompts && !changingSession) client::scrollPrompt else null,
-                    toolbarKeys=model.toolbarKeys,controlItems=model.controlItems,showTopDivider=sideTabs,onKeyboard=onKeyboard)
+                    toolbarKeys=model.toolbarKeys,controlItems=model.controlItems,showTopDivider=sideTabs,
+                    onKeyboard=onKeyboard.takeUnless {sideTabs})
             }
         }
     }

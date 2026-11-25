@@ -703,12 +703,13 @@ private val workingPhase by lazy {
 internal val activityButtonDiameter=41.dp
 
 @Composable internal fun TerminalActions(enabled: Boolean,activityEnabled: Boolean,
-    onActivity: ()->Unit,onSwitcher: ()->Unit,attentionCount: Int=0,keyboardLabel: String="",onKeyboard: (()->Unit)?=null,vertical: Boolean=false) {
+    onActivity: ()->Unit,onSwitcher: ()->Unit,attentionCount: Int=0,vertical: Boolean=false,
+    keyboard: (@Composable ()->Unit)?=null) {
     // The icon-only side rail stacks these actions.
     @Composable fun Group(content: @Composable ()->Unit)=
         if(vertical) Column(horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(4.dp)) {content()}
         else BoxWithConstraints {
-            val buttonCount=if(onKeyboard==null) 1 else 2
+            val buttonCount=if(keyboard==null) 1 else 2
             val spacing=if(constraints.hasBoundedWidth) with(LocalDensity.current) {
                 val buttonWidth=36.dp.roundToPx()*buttonCount+activityButtonDiameter.roundToPx()
                 ((constraints.maxWidth-buttonWidth)/buttonCount).coerceIn(0,4.dp.roundToPx()).toDp()
@@ -716,11 +717,7 @@ internal val activityButtonDiameter=41.dp
             Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(spacing)) {content()}
         }
     Group {
-        // Stands in for the key toolbar's keyboard button while the toolbar is hidden.
-        val keyboard: @Composable ()->Unit={
-            if(onKeyboard!=null) ChromeButton(ChromeIcon.KEYBOARD,keyboardLabel,enabled,onClick=onKeyboard)
-        }
-        if(!vertical) keyboard()
+        if(!vertical) keyboard?.invoke()
         ChromeButton(ChromeIcon.SPLIT,"Tabs and panes",enabled,readable=activityEnabled,onClick=onSwitcher)
         Box(Modifier.size(activityButtonDiameter).testTag("Activity button surface"),contentAlignment=Alignment.Center) {
             Box(Modifier.matchParentSize().clip(RoundedCornerShape(23.dp)).background(MaterialTheme.colorScheme.surfaceVariant))
@@ -733,12 +730,24 @@ internal val activityButtonDiameter=41.dp
                 .background(MaterialTheme.colorScheme.surfaceVariant,RoundedCornerShape(5.dp)).padding(1.dp)
                 .background(MaterialTheme.colorScheme.primary,RoundedCornerShape(4.dp)).semantics {testTag="Activity unread dot"})
         }
-        if(vertical) keyboard()
+        if(vertical) keyboard?.invoke()
+    }
+}
+
+@Composable internal fun TerminalKeyboardButton(controlled: Boolean,enabled: Boolean,keyboardVisible: Boolean,
+    readable: Boolean=enabled,inputKey: String="",onPaste: (()->Unit)?=null,onClick: ()->Unit) {
+    key(inputKey) {
+        ChromeButton(if(keyboardVisible) ChromeIcon.HIDE_KEYBOARD else ChromeIcon.KEYBOARD,
+            when {
+                !controlled -> "Take control and show keyboard"
+                keyboardVisible -> "Hide keyboard"
+                else -> "Show keyboard"
+            },enabled,readable=readable,onLongClick=if(controlled && enabled) onPaste else null,onClick=onClick)
     }
 }
 
 @Composable internal fun KeyboardBar(controlled: Boolean,enabled: Boolean,control: Boolean,alt: Boolean,shift: Boolean,
-    keyboardVisible: Boolean,onControl: ()->Unit,onAlt: ()->Unit,onShift: ()->Unit,onShiftPress: ()->Unit,onShiftRelease: (Boolean)->Unit,onKey: (String)->Unit,readable: Boolean=enabled,onControlShortcut: (String)->Unit={},inputKey: String="",shortcutGesture: ControlShortcutGesture=ControlShortcutGesture.HOLD,arrowJoystickEnabled: Boolean=true,onPaste: (() ->Unit)?=null,onPrompt: ((Int)->Unit)?=null,toolbarKeys: List<ToolbarKey> = ToolbarLayout.defaults,controlItems: List<ControlShortcut> = ControlShortcutConfig.defaults,showTopDivider: Boolean=true,onKeyboard: ()->Unit) {
+    keyboardVisible: Boolean,onControl: ()->Unit,onAlt: ()->Unit,onShift: ()->Unit,onShiftPress: ()->Unit,onShiftRelease: (Boolean)->Unit,onKey: (String)->Unit,readable: Boolean=enabled,onControlShortcut: (String)->Unit={},inputKey: String="",shortcutGesture: ControlShortcutGesture=ControlShortcutGesture.HOLD,arrowJoystickEnabled: Boolean=true,onPaste: (() ->Unit)?=null,onPrompt: ((Int)->Unit)?=null,toolbarKeys: List<ToolbarKey> = ToolbarLayout.defaults,controlItems: List<ControlShortcut> = ControlShortcutConfig.defaults,showTopDivider: Boolean=true,onKeyboard: (() ->Unit)?) {
     val toolbar=ToolbarLayout.normalize(toolbarKeys)
     var expanded by remember {mutableStateOf(false)}
     // The extra-key trigger lives just before Esc, outside the initial viewport.
@@ -781,8 +790,7 @@ internal val activityButtonDiameter=41.dp
                     }
                 }
             }
-            key(inputKey) {ChromeButton(if(keyboardVisible) ChromeIcon.HIDE_KEYBOARD else ChromeIcon.KEYBOARD,
-                if(!controlled) "Take control and show keyboard" else if(keyboardVisible) "Hide keyboard" else "Show keyboard",enabled,readable=readable,onLongClick=if(controlled && enabled) onPaste else null,onClick=onKeyboard)}
+            if(onKeyboard!=null) TerminalKeyboardButton(controlled,enabled,keyboardVisible,readable,inputKey,onPaste,onKeyboard)
         }
         if(expanded) {
             val extra=listOf((1..6).map {"F$it" to "f$it"},(7..12).map {"F$it" to "f$it"},

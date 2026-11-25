@@ -229,14 +229,16 @@ class PaneChromeTest {
         val programs=listOf(ProgramIdentity.resolve(listOf("codex")),ProgramIdentity.resolve(listOf("fish")))
         val actions=mutableListOf<String>()
         val unread=mutableIntStateOf(0)
+        var keyboardVisible by mutableStateOf(false)
         ui.setContent {RexTheme(false,ThemeCatalog.defaults[1]) {
             var style by remember {mutableStateOf(TabRailStyle.TITLES)}
             Row(Modifier.size(440.dp,380.dp).background(MaterialTheme.colorScheme.background).testTag("Side tabs fixture")) {
                 TerminalTabRail(windows,"tab",true,{actions+=it},{programs},{0},TabBarPosition.LEFT,style,
                     paneWorking={true},paneProgress={if(it.id=="progress") TerminalProgress("indeterminate",null) else null},
                     tabAttention={if(it.id=="tab") unread.intValue else 0},onStyle={style=it},animateWorking=false,onNewTab={actions+="new tab"}) {
-                    TerminalActions(true,true,{actions+="activity"},{actions+="switcher"},
-                        keyboardLabel="Show keyboard",onKeyboard={actions+="keyboard"},vertical=style==TabRailStyle.ICONS)
+                    TerminalActions(true,true,{actions+="activity"},{actions+="switcher"},vertical=style==TabRailStyle.ICONS) {
+                        TerminalKeyboardButton(true,true,keyboardVisible) {actions+="keyboard"}
+                    }
                 }
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface))
             }
@@ -307,6 +309,10 @@ class PaneChromeTest {
         val keyboard=ui.onNodeWithContentDescription("Show keyboard").fetchSemanticsNode().boundsInRoot
         assertTrue(activity.bottom<=keyboard.top && keyboard.bottom<=collapsedToggle.top)
         assertEquals(keyboard.center.x,collapsedToggle.center.x,1f)
+        ui.runOnIdle {keyboardVisible=true}
+        val hideKeyboard=ui.onNodeWithContentDescription("Hide keyboard").assertIsDisplayed()
+        assertEquals(keyboard,hideKeyboard.fetchSemanticsNode().boundsInRoot)
+        ui.runOnIdle {keyboardVisible=false}
         expand.performClick()
         assertEquals(expandedToggle,collapse.fetchSemanticsNode().boundsInRoot)
         ui.runOnIdle {assertEquals(List(2) {listOf("new tab","keyboard","switcher","activity")}.flatten(),actions)}

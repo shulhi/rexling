@@ -89,6 +89,7 @@ class TerminalView(context: Context) : View(context) {
     internal var onInputConnectionReady: ()->Unit = {}
     var onScroll: (Int) -> Unit = {}
     var onWheel: (Int,Int,Int,Int,Int) -> Unit = {lines,_,_,_,_->onScroll(lines)}
+    internal var keyboardPan: TerminalImePanState?=null
     var onActivate: (Boolean) -> Unit = {}
     var onMouseClick: (Int,Int,Int,Int) -> Unit = {_,_,_,_->}
     internal var onSemanticCopy: ((TerminalScreen,Int,Int,Boolean)->Boolean)?=null
@@ -171,6 +172,7 @@ class TerminalView(context: Context) : View(context) {
     private var recordedApplicationLines: List<List<TerminalCell>>?=null
     private var reuseApplicationRowsUntil=0L
     private var suppressScrollTap=false
+    private var draggedKeyboardViewport=false
     private val linkIndex=TerminalLinks.Index()
     private var recorded= arrayOfNulls<RecordedRow>(0)
     private var rowGeometry=""
@@ -530,6 +532,15 @@ class TerminalView(context: Context) : View(context) {
             invalidate()
         }
     }
+    private fun dragScroll(pixels: Float) {
+        val frame=screen ?: return
+        // Scrollback can reveal earlier text on its own. Application wheel events cannot expose
+        // the clipped part of this terminal view, so give the local viewport first use of the drag.
+        val remaining=if(pixels>0 || frame.scroll.offset==0L || (frame.applicationScroll && frame.scroll.below==0L))
+            keyboardPan?.consumeDrag(pixels) ?: pixels else pixels
+        if(remaining!=pixels) draggedKeyboardViewport=true
+        if(remaining!=0f) scrollByPixels(remaining)
+    }
     internal val scrollTranslation: Float get()=screen?.let {slideFor(it)} ?: 0f
     private fun slideFor(frame: TerminalScreen): Float {
         // Image placements outside the viewport are not yet available. Keep their
@@ -659,7 +670,9 @@ class TerminalView(context: Context) : View(context) {
         }
         if(event.actionMasked==MotionEvent.ACTION_UP || event.actionMasked==MotionEvent.ACTION_CANCEL) mouseTouch=false
         if(selectionTouch || selection!=null) return selectionEvent(event)
-        if(event.actionMasked==MotionEvent.ACTION_DOWN) {touchVelocity?.recycle();touchVelocity=VelocityTracker.obtain()}
+        if(event.actionMasked==MotionEvent.ACTION_DOWN) {
+            touchVelocity?.recycle();touchVelocity=VelocityTracker.obtain();draggedKeyboardViewport=false
+        }
         val sample=MotionEvent.obtain(event)
         sample.offsetLocation(event.rawX-event.x,event.rawY-event.y)
         touchVelocity?.addMovement(sample);sample.recycle()
@@ -674,7 +687,7 @@ class TerminalView(context: Context) : View(context) {
                     if(kotlin.math.abs(dx)>slop || kotlin.math.abs(dy)>slop) removeCallbacks(longPress)
                     if(!scrolling && kotlin.math.abs(dx)>slop && kotlin.math.abs(dx)>kotlin.math.abs(dy)*1.5f) dragging=true
                     if(!dragging && kotlin.math.abs(dy)>slop && kotlin.math.abs(dy)>kotlin.math.abs(dx)*1.5f) {scrolling=true;paneGesture.cancel()}
-                    if(scrolling) {scrollByPixels(lastScrollY-event.rawY);lastScrollY=event.rawY}
+                    if(scrolling) {dragScroll(lastScrollY-event.rawY);lastScrollY=event.rawY}
                     else if(dragging) onPaneDrag?.invoke(dx,true)
                 }
             }
@@ -684,7 +697,7 @@ class TerminalView(context: Context) : View(context) {
                 val velocity=-(touchVelocity?.yVelocity ?: 0f).toInt()
                 val frame=screen
                 val history=frame?.scroll?.takeUnless {frame.applicationScroll && it.below==0L}
-                if(history!=null && history.available>0) {
+                if(!draggedKeyboardViewport && history!=null && history.available>0) {
                     val minimum=-(history.offset.toDouble()*cellHeight).coerceAtMost(1000000.0).toInt()
                     val maximum=(history.below.toDouble()*cellHeight).coerceAtMost(1000000.0).toInt()
                     lastFlingY=0;scrollFling.fling(0,0,0,velocity,0,0,minimum,maximum);postInvalidateOnAnimation()

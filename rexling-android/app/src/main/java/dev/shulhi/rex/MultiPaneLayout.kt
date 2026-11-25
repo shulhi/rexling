@@ -273,6 +273,7 @@ internal fun MultiPaneLayout(
                     derivedStateOf(referentialEqualityPolicy()) { client.paneFrames[pane.id] }
                 }
                 var keyboardFocus by remember { mutableStateOf<TerminalKeyboardFocus?>(null) }
+                val keyboardPan=remember(live) {TerminalImePanState()}
                 val reportSize by rememberUpdatedState<(Int,Int)->Unit> { columns,rows->
                     sizes[pane.id]=columns to rows
                     if(live) client.resize(columns,rows)
@@ -292,7 +293,7 @@ internal fun MultiPaneLayout(
                         val fullHeight=visibleHeight+cover.toDp()
                         (fullHeight*heightFraction-trim).coerceAtLeast(0.dp).roundToPx() -
                             (height-trim).coerceAtLeast(0.dp).roundToPx()
-                    },topOcclusion={headerOverlap()-(paneInset+y+inset+1.5.dp).roundToPx()}) {keyboardFocus.takeIf {live}},
+                    },topOcclusion={headerOverlap()-(paneInset+y+inset+1.5.dp).roundToPx()},pan=keyboardPan) {keyboardFocus.takeIf {live}},
                     update={view->
                         if(floating && !retiring) floatingMotion?.trackView(pane.id,view)
                         imeHandoff.mount(pane,view)
@@ -309,6 +310,7 @@ internal fun MultiPaneLayout(
                         view.onDimensions=dimensions
                         view.onKeyboardFocus=if(live) ({keyboardFocus=it}) else null
                         keyboardFocus=if(live) view.keyboardFocus else null
+                        view.keyboardPan=keyboardPan.takeIf {live}
                         view.onInput=client::type
                         view.onActivate=client::takeControl
                         view.onMouseClick=client::click

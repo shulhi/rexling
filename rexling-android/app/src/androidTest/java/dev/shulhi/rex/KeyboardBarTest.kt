@@ -189,6 +189,18 @@ class KeyboardBarTest {
         ui.onNodeWithContentDescription("Show extra keys").assertIsNotDisplayed()
     }
 
+    @Test fun controlRowKeepsAllKeysWhenTheKeyboardToggleLivesInTheSidebar() {
+        ui.setContent {MaterialTheme {
+            KeyboardBar(true,true,false,false,false,true,{},{},{},{},{},{sent+=it},onKeyboard=null)
+        }}
+        ui.onNodeWithContentDescription("Hide keyboard").assertDoesNotExist()
+        for(label in listOf("Escape","Control","Alt","Shift","Tab key","Arrow keys","Enter")) {
+            ui.onNodeWithContentDescription(label).assertIsDisplayed()
+        }
+        ui.onNodeWithContentDescription("Enter").performClick()
+        ui.runOnIdle {assertEquals(listOf("enter"),sent)}
+    }
+
     @Test fun viewingConnectedTerminalKeepsIconsCrispWithoutEnablingTyping() {
         val controlled=mutableStateOf(true)
         keyboard(ready=true,controlled={controlled.value})

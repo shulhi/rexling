@@ -120,6 +120,7 @@ import dev.chrisbanes.haze.hazeSource
                 DisposableEffect(block.id,floatingMotion) {onDispose {imeHandoff.remove(block.id);floatingMotion?.forget(block.id)}}
                 val trackFloating=center && paneLayout.any {it.id==block.id && it.floating}
                 var keyboardFocus by remember {mutableStateOf<TerminalKeyboardFocus?>(null)}
+                val keyboardPan=remember {TerminalImePanState()}
                 Box(Modifier.width(cardWidth).fillMaxHeight().graphicsLayer {
                     val position=pageOffset+drag
                     translationX=kotlin.math.round(leftPx+position)
@@ -132,7 +133,7 @@ import dev.chrisbanes.haze.hazeSource
                         Box(Modifier.fillMaxSize()) {
                             if(frame!=null) AndroidView(
                                 factory={TerminalView(it)},modifier=Modifier.fillMaxSize().terminalImeViewport(imeInsets,navigationInsets,keyboardChrome,
-                                    extendsUnderNavigation,headerHeightSaved,headerOverlap) {keyboardFocus}.clipToBounds(),
+                                    extendsUnderNavigation,headerHeightSaved,headerOverlap,pan=keyboardPan) {keyboardFocus}.clipToBounds(),
                                 update={view ->
                                     view.keepAwakeMode=if(center) keepAwake else KeepScreenAwake.SYSTEM
                                     if(trackFloating) floatingMotion?.trackView(block.id,view)
@@ -140,6 +141,8 @@ import dev.chrisbanes.haze.hazeSource
                                     view.onInputConnectionReady={if(center) imeHandoff.served(block.id,view)}
                                     view.onKeyboardFocus={keyboardFocus=it}
                                     keyboardFocus=view.keyboardFocus
+                                    view.keyboardPan=keyboardPan.takeIf {center && block.id==liveBlock}
+                                    if(view.keyboardPan==null) keyboardPan.followCursor()
                                     view.onDimensions=if(center && block.id==liveBlock) onDimensions else {_,_->}
                                     val bottomPadding=if(bottomControlsInset>0.dp || blocks.size>1) 28 else 6
                                     view.setTerminalPaddingDp(12,8,bottomPadding+navigationClearance.value.roundToInt())
