@@ -161,7 +161,6 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
     var controlSettings by remember {mutableStateOf(false)}
     var alerts by remember {mutableStateOf(false)}
     var closeTarget by remember {mutableStateOf<TerminalCloseTarget?>(null)}
-    val fontSize=model.fontSize
     var fontPicker by remember {mutableStateOf(false)}
     var terminalView by remember {mutableStateOf<TerminalView?>(null)}
     val context=LocalContext.current
@@ -217,6 +216,7 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
     @OptIn(ExperimentalLayoutApi::class) val keyboardShown=WindowInsets.isImeVisible
     val toolbarHidden=model.toolbarWithKeyboardOnly && !keyboardShown
     val tabWidth=currentTabWidth()
+    val fontSize=model.fontSizes.getValue(tabWidth.first)
     // Whether the bottom panel shows (it then takes the bottom inset), and whether the terminal row
     // instead extends under the gesture handle: side tabs with the key toolbar hidden.
     val panelShown=state.connected || state.phase=="preview" || client.hasScreen
@@ -475,7 +475,7 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
                         }
                         else if(tiles!=null && window!=null) MultiPaneLayout(
                             client,displayedSession,window.id,tiles,chosen,liveBlock,controlled,state.programs,state.mirrorWaiting,
-                            fontSize.toFloat(),onFocus={id,grid->client.selectBlock(id,grid,keepTiled=true)},
+                            fontSize,onFocus={id,grid->client.selectBlock(id,grid,keepTiled=true)},
                             onView=onView,onImage=imageCommit,onPaste=::pasteClipboard,imeEnterSubmits=model.enterSubmits,
                             keyboardChrome={if(model.toolbarWithKeyboardOnly) toolbarHeight[0] else 0},
                             headerHeightSaved=currentHeaderSavings,headerOverlap=currentHeaderOverlap,
@@ -487,7 +487,7 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
                             onClosePane={id->blocks.firstOrNull {it.id==id}?.let {closeTarget=closePaneTarget(it)}},
                             floatingMotion=floatingMotion,
                         )
-                        else LiveTerminal(client,carouselBlocks,chosen,liveBlock,state.programs,controlled,fontSize.toFloat(),
+                        else LiveTerminal(client,carouselBlocks,chosen,liveBlock,state.programs,controlled,fontSize,
                             client::type,client::scroll,client::wheel,client::takeControl,client::scrollToBottom,client::resize,::openPane,{picker="panes"},onView,
                             Modifier.fillMaxSize(),floatingDock=floating.isNotEmpty(),paneLayout=window?.layout.orEmpty(),titles=state.titles,directories=state.directories,
                             hazeState=terminalHaze,captureBackdrop=captureTerminal,onImage=imageCommit,onPaste=::pasteClipboard,imeEnterSubmits=model.enterSubmits,
@@ -681,7 +681,7 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
             dismissButton={TextButton(onClick={closeTarget=null}) {Text("Cancel")}})
     }
     if(appearance) AppearanceSheet(model.appearance,model.themes,model.theme(false),model.theme(true),model::changeAppearance,model::chooseTheme,hazeState=workspaceHaze) {appearance=false}
-    if(fontPicker) FontSizeDialog(fontSize,model::changeFontSize,hazeState=workspaceHaze) {fontPicker=false}
+    if(fontPicker) FontSizeDialog(model.fontSizes,tabWidth.first,model::changeFontSize,hazeState=workspaceHaze) {fontPicker=false}
     if(newSession) NewSessionDialog(model.activeServer.label,ready,client::createSession) {newSession=false}
 
 }

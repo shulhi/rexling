@@ -56,7 +56,7 @@ import androidx.compose.ui.unit.dp
             SettingsSection("Display",compact=true) {
                 SettingsRow("Appearance","Themes and light or dark mode",SettingsGlyph.APPEARANCE,onAppearance)
                 SettingsDivider()
-                SettingsRow("Font size","Terminal text size",SettingsGlyph.FONT,onFont)
+                SettingsRow("Font size","Terminal text size by window width",SettingsGlyph.FONT,onFont)
                 SettingsDivider()
                 Column(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=10.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
                     Text("Compact top bar",style=SettingsType.paneTitle)
@@ -290,7 +290,7 @@ private fun paneLayoutLabel(multiple: Boolean)=if(multiple) "Multiple panes" els
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable private fun <T> PreferenceSegments(options: List<T>,selected: T,label: (T)->String,showCheck: Boolean=false,onSelect: (T)->Unit) {
+@Composable internal fun <T> PreferenceSegments(options: List<T>,selected: T,label: (T)->String,showCheck: Boolean=false,onSelect: (T)->Unit) {
     val colors=MaterialTheme.colorScheme
     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
         options.forEachIndexed {index,option->

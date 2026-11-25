@@ -7,9 +7,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -78,17 +81,28 @@ import kotlin.math.roundToInt
     }
 }
 
-@Composable internal fun FontSizeDialog(size: Int,onSize: (Int)->Unit,hazeState: dev.chrisbanes.haze.HazeState?=null,onClose: ()->Unit) {
-    SettingsDrawer("Font size","Close font size",onClose,hazeState) {
-        Column(Modifier.fillMaxWidth().padding(horizontal=16.dp).padding(top=8.dp,bottom=12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+@Composable internal fun FontSizeDialog(sizes: Map<TabWidthClass,Float>,current: TabWidthClass,
+    onSize: (TabWidthClass,Float)->Unit,hazeState: dev.chrisbanes.haze.HazeState?=null,onClose: ()->Unit) {
+    var editing by rememberSaveable {mutableStateOf<TabWidthClass?>(null)}
+    val profile=editing ?: current
+    val size=sizes.getValue(profile)
+    val sizeLabel=if(size==size.toInt().toFloat()) "${size.toInt()} sp" else "$size sp"
+    SettingsDrawer("Font size","Close font size",onClose,hazeState,subtitle="This window uses ${current.title}") {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal=16.dp).padding(top=8.dp,bottom=12.dp),
+            verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            PreferenceSegments(TabWidthClass.entries,profile,{it.title}) {editing=it}
             Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween) {
-                IconButton(onClick={onSize(size-1)},enabled=size>8,modifier=Modifier.semantics {contentDescription="Decrease font size"}) {Text("−",fontSize=24.sp)}
-                Text("$size sp",fontFamily=MonoUi,fontSize=16.sp)
-                IconButton(onClick={onSize(size+1)},enabled=size<20,modifier=Modifier.semantics {contentDescription="Increase font size"}) {Text("+",fontSize=24.sp)}
+                IconButton(onClick={onSize(profile,size-TerminalFontSizeStep)},enabled=size>TerminalFontSizes.start,
+                    modifier=Modifier.semantics {contentDescription="Decrease font size"}) {Text("−",fontSize=24.sp)}
+                Text(sizeLabel,fontFamily=MonoUi,fontSize=16.sp)
+                IconButton(onClick={onSize(profile,size+TerminalFontSizeStep)},enabled=size<TerminalFontSizes.endInclusive,
+                    modifier=Modifier.semantics {contentDescription="Increase font size"}) {Text("+",fontSize=24.sp)}
             }
-            Slider(value=size.toFloat(),onValueChange={onSize(it.roundToInt())},valueRange=8f..20f,steps=11,modifier=Modifier.semantics {contentDescription="Font size"})
+            Slider(value=size,onValueChange={onSize(profile,(it/TerminalFontSizeStep).roundToInt()*TerminalFontSizeStep)},
+                valueRange=TerminalFontSizes,steps=((TerminalFontSizes.endInclusive-TerminalFontSizes.start)/TerminalFontSizeStep).toInt()-1,
+                modifier=Modifier.semantics {contentDescription="Font size"})
             Text("Aa 0123 / ~",fontFamily=MonoUi,fontSize=size.sp)
-        }
             TextButton(onClick=onClose,modifier=Modifier.align(Alignment.End)){Text("Done")}
+        }
     }
 }

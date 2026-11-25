@@ -16,7 +16,7 @@ class TerminalTypographyTest {
         val fonts=TerminalFonts(context)
         val paint=Paint()
         val glyphs=listOf(0xe0a0,0xe0b0,0xf07b,0xf120,0xe7a8,0xf031d).map {String(Character.toChars(it))}
-        for(size in listOf(8f,10f,12f,14f,16f,18f)) {
+        for(size in listOf(8f,10f,10.5f,11.5f,12f,14f,16f,18f,20f)) {
             val grid=fonts.configure(paint,size)
             for(style in listOf(fonts.regular,fonts.bold,fonts.italic,fonts.boldItalic)) {
                 paint.typeface=style
@@ -31,7 +31,7 @@ class TerminalTypographyTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val fonts = TerminalFonts(context)
         val paint = Paint()
-        for (size in listOf(8f, 10f, 12f, 14f, 16f, 18f)) {
+        for (size in listOf(8f, 10f, 10.5f, 11.5f, 12f, 14f, 16f, 18f, 20f)) {
             val grid = fonts.configure(paint, size)
             assertEquals(grid.cellWidth.toInt().toFloat(), grid.cellWidth, 0f)
             assertTrue(grid.cellHeight > 0f && grid.baseline in 0f..grid.cellHeight)

@@ -31,21 +31,36 @@ class AppearanceSheetTest {
         ui.onNodeWithContentDescription("Theme Abyssal Trench").performClick()
         ui.runOnIdle {assertEquals("abyssal-trench",chosen);assertEquals(Appearance.SYSTEM,mode)}
     }
-    @Test fun fontSizeChangesOneSpAtATime() {
-        val size=mutableIntStateOf(10)
-        ui.setContent {MaterialTheme {FontSizeDialog(size.intValue,{size.intValue=it},onClose={})}}
-        ui.onNodeWithContentDescription("Increase font size").performClick();ui.onNodeWithText("11 sp").assertIsDisplayed()
+    @Test fun fontSizeChangesHalfAnSpAtATimeForTheSelectedWidth() {
+        val sizes=mutableStateMapOf(TabWidthClass.NARROW to 8f,TabWidthClass.MEDIUM to 10f,TabWidthClass.WIDE to 12f)
+        var current by mutableStateOf(TabWidthClass.MEDIUM)
+        ui.setContent {MaterialTheme {FontSizeDialog(sizes,current,{width,size->sizes[width]=size},onClose={})}}
+        ui.onNodeWithText("Medium").assertIsSelected()
+        ui.runOnIdle {current=TabWidthClass.WIDE}
+        ui.onNodeWithText("This window uses Wide").assertIsDisplayed()
+        ui.onNodeWithText("Wide").assertIsSelected()
+        ui.onNodeWithText("12 sp").assertIsDisplayed()
+        ui.onNodeWithText("Medium").performClick().assertIsSelected()
+        ui.onNodeWithContentDescription("Increase font size").performClick();ui.onNodeWithText("10.5 sp").assertIsDisplayed()
         ui.onNodeWithContentDescription("Decrease font size").performClick();ui.onNodeWithText("10 sp").assertIsDisplayed()
-        ui.onNodeWithContentDescription("Font size").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) {it(9f)}
-        ui.onNodeWithText("9 sp").assertIsDisplayed()
+        ui.onNodeWithContentDescription("Font size").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) {it(11.5f)}
+        ui.onNodeWithText("11.5 sp").assertIsDisplayed()
+        ui.onNodeWithText("Narrow").performClick().assertIsSelected()
+        ui.onNodeWithText("8 sp").assertIsDisplayed()
+        ui.onNodeWithContentDescription("Decrease font size").assertIsNotEnabled()
+        ui.runOnIdle {assertEquals(mapOf(TabWidthClass.NARROW to 8f,TabWidthClass.MEDIUM to 11.5f,TabWidthClass.WIDE to 12f),sizes.toMap())}
     }
     @Test fun lightAndDarkChoicesAndFontSizeSurviveModelRecreation() {
         val name="rexlink-theme-test-${System.nanoTime()}";val store=ViewModelStore()
         fun main(block: ()->Unit)=InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
         try {
             main {
+                app.getSharedPreferences(name,0).edit().putInt("font_size",12).putInt("font_size_medium",13).apply()
                 val first=RexModel(app,name);store.put("theme",first)
-                first.chooseTheme("merino-dark");first.chooseTheme("merino-light");first.changeFontSize(11)
+                assertEquals(mapOf(TabWidthClass.NARROW to 12f,TabWidthClass.MEDIUM to 13f,TabWidthClass.WIDE to 12f),first.fontSizes)
+                first.chooseTheme("merino-dark");first.chooseTheme("merino-light")
+                first.changeFontSize(TabWidthClass.NARROW,11.5f)
+                first.changeFontSize(TabWidthClass.WIDE,21f)
                 first.changeAppearance(Appearance.DARK)
                 assertTrue(first.arrowJoystickEnabled)
                 first.changeArrowJoystick(false)
@@ -64,7 +79,8 @@ class AppearanceSheetTest {
                 first.enableNeovimShortcuts(false)
                 first.moveNeovimShortcut(androidx.compose.ui.geometry.Offset(.7f,.2f))
                 val second=RexModel(app,name);store.put("theme2",second)
-                assertEquals("merino-dark",second.theme(true).id);assertEquals("merino-light",second.theme(false).id);assertEquals(11,second.fontSize)
+                assertEquals("merino-dark",second.theme(true).id);assertEquals("merino-light",second.theme(false).id)
+                assertEquals(mapOf(TabWidthClass.NARROW to 11.5f,TabWidthClass.MEDIUM to 13f,TabWidthClass.WIDE to 20f),second.fontSizes)
                 assertEquals(Appearance.DARK,second.appearance)
                 assertFalse(second.arrowJoystickEnabled)
                 assertTrue(second.toolbarSystemColors)

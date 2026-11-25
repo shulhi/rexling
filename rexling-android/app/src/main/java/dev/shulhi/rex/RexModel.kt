@@ -15,6 +15,9 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
+internal val TerminalFontSizes=8f..20f
+internal const val TerminalFontSizeStep=.5f
+
 class RexModel @JvmOverloads constructor(application: Application, preferenceName: String="rex") : AndroidViewModel(application) {
     internal var activityVisible by mutableStateOf(false)
         private set
@@ -127,8 +130,22 @@ class RexModel @JvmOverloads constructor(application: Application, preferenceNam
         immersiveStatusBar=value
         preferences.edit {putBoolean("immersive_status_bar",value)}
     }
-    var fontSize by mutableIntStateOf(preferences.getInt("font_size",10).coerceIn(8,20))
+    internal var fontSizes by mutableStateOf(TabWidthClass.entries.associateWith {profile->
+        val key=fontSizeKey(profile)
+        val previous=preferences.getInt(key,preferences.getInt("font_size",10))
+        // SharedPreferences stores integers and floats as different types.
+        preferences.getFloat("${key}_sp",previous.toFloat()).coerceIn(TerminalFontSizes)
+    })
         private set
+    private fun fontSizeKey(profile: TabWidthClass)="font_size_${profile.name.lowercase()}"
+
+    internal fun changeFontSize(profile: TabWidthClass,size: Float) {
+        val clamped=size.coerceIn(TerminalFontSizes)
+        if(fontSizes[profile]==clamped) return
+        fontSizes=fontSizes+(profile to clamped)
+        preferences.edit {putFloat("${fontSizeKey(profile)}_sp",clamped)}
+    }
+
     internal fun theme(dark: Boolean): AppTheme {
         val id=if(dark) darkTheme else lightTheme
         return ThemeCatalog.defaults.firstOrNull {it.id==id && it.terminal.dark==dark} ?: ThemeCatalog.resolve(themes,dark,id)
@@ -138,7 +155,6 @@ class RexModel @JvmOverloads constructor(application: Application, preferenceNam
         if(theme.terminal.dark) darkTheme=id else lightTheme=id
         preferences.edit {putString(if(theme.terminal.dark) "dark_theme" else "light_theme",id)}
     }
-    fun changeFontSize(size: Int) {fontSize=size.coerceIn(8,20);preferences.edit {putInt("font_size",fontSize)}}
     var appearance by mutableStateOf(runCatching {Appearance.valueOf(preferences.getString("appearance","SYSTEM")!!)}.getOrDefault(Appearance.SYSTEM))
         private set
     internal var minimizeFloatingPanes by mutableStateOf(preferences.getBoolean("minimize_floating_panes",false))
