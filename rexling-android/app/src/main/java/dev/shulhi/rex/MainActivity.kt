@@ -474,8 +474,14 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
                                 inCorner
                             }
                             view.onOpenLink={url->
+                                val remotePath=TerminalLinks.filePath(url)
                                 val loopback=LoopbackLink.parse(url)
-                                if(loopback==null) PortForwards.openBrowser(context,url)
+                                if(remotePath!=null) {
+                                    if(ready && chosen==liveBlock && displayedSession.isNotBlank()) {
+                                        model.downloads.offer(FileDownloadTarget(model.activeServer,displayedSession,chosen,remotePath))
+                                    } else model.downloads.notice="Wait for this pane to connect before downloading its file."
+                                }
+                                else if(loopback==null) PortForwards.openBrowser(context,url)
                                 else if(ready && chosen==liveBlock && displayedSession.isNotBlank()) {
                                     val sourceServer=model.activeServer;val sourceSession=displayedSession
                                     withUploadNetwork({if(model.servers.any {it.id==sourceServer.id && it.endpoint==sourceServer.endpoint}) PortForwards.openLink(context,sourceServer,sourceSession,loopback)})
@@ -633,6 +639,9 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
         layout=model.neovimShortcutLayout,onLayout=model::changeNeovimShortcutLayout,effect=model.neovimShortcutEffect,onEffect=model::changeNeovimShortcutEffect,
         hapticsEnabled=model.neovimShortcutHaptics,onHaptics=model::changeNeovimShortcutHaptics,hazeState=workspaceHaze)
     if(model.images.notice.isNotEmpty()) AlertDialog(onDismissRequest={model.images.notice=""},title={Text("File upload")},text={Text(model.images.notice)},confirmButton={TextButton(onClick={model.images.notice=""}) {Text("OK")}})
+    FileDownloadDialogs(model.downloads) {action->
+        withUploadNetwork(action) {model.downloads.notice="Allow local network access to download from this server."}
+    }
     if(about) AboutSheet(hazeState=workspaceHaze) {about=false}
     if(alerts) BackgroundAlertsDialog(model,hazeState=workspaceHaze) {alerts=false}
     if(forwards) PortForwardSheet(model.forwardServers(),model.activeServerId,workspaceHaze,onClose={forwards=false},onStart={id->

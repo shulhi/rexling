@@ -121,6 +121,9 @@ impl Control {
     pub async fn connect_upload(endpoint: Endpoint) -> Result<Self> {
         Self::connect_revision(endpoint, None, Trace::default(), 11).await
     }
+    pub async fn connect_download(endpoint: Endpoint) -> Result<Self> {
+        Self::connect_revision(endpoint, None, Trace::default(), 19).await
+    }
     pub async fn connect_forward(endpoint: Endpoint, token: Option<&str>) -> Result<Self> {
         Self::connect_revision(endpoint, token, Trace::default(), 14).await
     }

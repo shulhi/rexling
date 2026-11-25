@@ -145,10 +145,16 @@ mod input_queue;
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_shulhi_rex_NativeBridge_uploadCreate(mut env:JNIEnv,_class:JClass,request:JString)->jlong {
+    create_file_transfer(&mut env, request, false)
+}
+fn create_file_transfer(env: &mut JNIEnv, request: JString, receiving: bool) -> jlong {
     let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||->anyhow::Result<u64>{
-        let request:String=env.get_string(&request)?.into();uploads::create(serde_json::from_str(&request)?)
+        let request:String=env.get_string(&request)?.into();uploads::create(serde_json::from_str(&request)?,receiving)
     }));
-    match result {Ok(Ok(id))=>id as jlong,_=>{let _=env.throw_new("java/lang/IllegalStateException","Could not start file upload");0}}
+    match result {
+        Ok(Ok(id))=>id as jlong,
+        _=>{let _=env.throw_new("java/lang/IllegalStateException",if receiving {"Could not start file download"} else {"Could not start file upload"});0}
+    }
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_shulhi_rex_NativeBridge_uploadPoll(mut env:JNIEnv,_class:JClass,handle:jlong)->jstring {
@@ -156,6 +162,17 @@ pub extern "system" fn Java_dev_shulhi_rex_NativeBridge_uploadPoll(mut env:JNIEn
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_shulhi_rex_NativeBridge_uploadDestroy(_env:JNIEnv,_class:JClass,handle:jlong) {uploads::destroy(handle as u64);}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shulhi_rex_NativeBridge_downloadCreate(mut env:JNIEnv,_class:JClass,request:JString)->jlong {
+    create_file_transfer(&mut env, request, true)
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shulhi_rex_NativeBridge_downloadPoll(mut env:JNIEnv,_class:JClass,handle:jlong)->jstring {
+    string(&mut env,uploads::poll(handle as u64).to_string())
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shulhi_rex_NativeBridge_downloadDestroy(_env:JNIEnv,_class:JClass,handle:jlong) {uploads::destroy(handle as u64);}
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_shulhi_rex_NativeBridge_forwardCreate(mut env: JNIEnv, _class: JClass, request: JString) -> jlong {

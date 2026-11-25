@@ -11,17 +11,29 @@ internal object TerminalLinks {
     const val WRAP=1 shl 27
     const val CONTINUATION=1 shl 28
     const val ROW_METADATA=1 shl 29
-    private val candidate=Regex("""(?i)(?<![\p{L}\p{N}_@/])(?:https?://|www\.)[^\s\p{Cc}<>"`“”]+""")
+    private val candidate=Regex("""(?i)(?<![\p{L}\p{N}_@/])(?:https?://|www\.|file://)[^\s\p{Cc}<>"`“”]+|(?<![\p{L}\p{N}_@/:~])/(?:[\p{L}\p{N}_.@+~-]+/)*[\p{L}\p{N}_.@+~-]+\.[\p{L}\p{N}]+(?![\p{L}\p{N}_@+~/%-])""")
     fun webUrl(value: String): String? {
         val normalized=if(value.startsWith("www.",true)) "https://$value" else value
         val uri=runCatching {URI(normalized)}.getOrNull() ?: return null
         return normalized.takeIf {(uri.scheme.equals("https",true) || uri.scheme.equals("http",true)) && !uri.host.isNullOrBlank()}
     }
+
+    /** File links resolve on the terminal server and are never dispatched to Android as file URIs. */
+    fun filePath(value: String): String? {
+        if(!value.startsWith("file:/",ignoreCase=true)) return null
+        val uri=runCatching {URI(value)}.getOrNull() ?: return null
+        if(uri.rawQuery!=null || uri.rawUserInfo!=null || uri.port!=-1 ||
+            (uri.rawAuthority!=null && uri.host==null)) return null
+        return uri.path?.takeIf {it.startsWith('/') && !it.endsWith('/') && it.none(Char::isISOControl)}
+    }
+
+    fun openableUrl(value: String): String?=webUrl(value) ?: value.takeIf {filePath(it)!=null}
+
     private data class Position(val row: Int,val start: Int,val end: Int)
     /** Conservative allocation-free scan of the same logical text used below.
      * Keep state across wrapped rows/cells, but break it at gaps, hidden or OSC 8 cells.
      */
-    private fun hasWebPrefix(source: List<List<TerminalCell>>,columns: Int): Boolean {
+    private fun hasLinkPrefix(source: List<List<TerminalCell>>,columns: Int): Boolean {
         var tail=0L
         for(cells in source) {
             var column=0
@@ -30,10 +42,12 @@ internal object TerminalLinks {
                 if(cell.x>column) tail=0L
                 if(cell.attributes and 16!=0 || cell.hyperlink!=null || cell.text.isEmpty()) tail=0L
                 else for(char in cell.text) {
+                    val previous=(tail and 0xff).toInt().toChar()
+                    if(char=='/' && !previous.isLetterOrDigit() && previous !in "_@/:~") return true
                     val code=when(char) {in 'A'..'Z'->char.code+32;in '\u0000'..'\u007f'->char.code;else->0}
                     tail=(tail shl 8) or code.toLong()
                     if(tail==0x68747470733a2f2fL || tail and 0x00ffffffffffffffL==0x687474703a2f2fL ||
-                        tail and 0xffffffffL==0x7777772eL) return true
+                        tail and 0xffffffffL==0x7777772eL || tail and 0x00ffffffffffffffL==0x66696c653a2f2fL) return true
                 }
                 column=cell.x+cell.width
             }
@@ -46,14 +60,14 @@ internal object TerminalLinks {
             val row=firstRow+offset
             for(cell in cells) {
                 if(cell.width<=0 || cell.x<0 || cell.x>=columns || cell.attributes and 16!=0) continue
-                val uri=cell.hyperlink?.let(::webUrl) ?: continue
+                val uri=cell.hyperlink?.let(::openableUrl) ?: continue
                 val previous=explicit.lastOrNull()
                 if(previous!=null && previous.row==row && previous.end==cell.x && previous.url==uri)
                     explicit[explicit.lastIndex]=previous.copy(end=(cell.x+cell.width).coerceAtMost(columns))
                 else explicit.add(TerminalLink(row,cell.x,(cell.x+cell.width).coerceAtMost(columns),uri,true))
             }
         }
-        if(!hasWebPrefix(source,columns)) return if(explicit.isEmpty()) emptyList() else explicit.sortedWith(compareBy({it.row},{it.start}))
+        if(!hasLinkPrefix(source,columns)) return if(explicit.isEmpty()) emptyList() else explicit.sortedWith(compareBy({it.row},{it.start}))
         val text=StringBuilder();val positions=ArrayList<Position>()
         source.forEachIndexed {offset,cells->
             val row=firstRow+offset
@@ -75,7 +89,7 @@ internal object TerminalLinks {
                 val last=value.last();val pair=when(last) {')'->'(';']'->'[';'}'->'{';else->null}
                 if(last in ".,;!:'’" || (pair!=null && value.count {it==last}>value.count {it==pair})) value=value.dropLast(1) else break
             }
-            val url=webUrl(value) ?: continue
+            val url=if(value.startsWith('/')) URI("file","",value,null).toASCIIString() else openableUrl(value) ?: continue
             val first=positions[match.range.first];val last=positions[match.range.first+value.length-1]
             if(partialStart && first.row==firstRow && first.start==0) continue
             if(partialEnd && last.row==firstRow+source.lastIndex && last.end>=columns) continue

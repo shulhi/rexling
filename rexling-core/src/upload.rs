@@ -19,6 +19,7 @@ pub const BYTES: &str = "rex.data.bytes.v1";
 pub enum Phase {
     Preparing,
     Sending,
+    Receiving,
     Finishing,
     Done,
     Unsupported,
@@ -31,6 +32,7 @@ impl Phase {
         match self {
             Self::Preparing => "preparing",
             Self::Sending => "sending",
+            Self::Receiving => "receiving",
             Self::Finishing => "finishing",
             Self::Done => "done",
             Self::Unsupported => "unsupported",
@@ -96,21 +98,9 @@ pub async fn upload(
                 return Err(error);
             }
         };
-        let bytes =
-            URL_SAFE_NO_PAD.decode(ticket["ticket"].as_str().context("Upload ticket missing")?)?;
-        ensure!(bytes.len() == 16, "Invalid upload ticket");
         ws = Some(request.endpoint.open("/api/data", BYTES).await?);
         let stream = ws.as_mut().unwrap();
-        let mut hello = vec![1];
-        hello.extend(bytes);
-        stream.send(Message::Binary(hello.into())).await?;
-        let welcome = tokio::time::timeout(request.endpoint.timeout, transport::receive(stream))
-            .await
-            .context("Upload handshake timed out")??;
-        ensure!(
-            matches!(welcome,Message::Binary(ref b) if b.len()==32 && b[0]==0x81 && b[17..20]==[0,0,0] && b[24..32].iter().any(|&n|n!=0)),
-            "Upload handshake rejected"
-        );
+        bytes_handshake(stream, &ticket, request.endpoint.timeout).await?;
         phase = Phase::Sending;
         progress(phase, 0, size);
         let mut sent = 0;
@@ -215,6 +205,32 @@ pub async fn upload(
         ),
         None => (Phase::Canceled, String::new()),
     }
+}
+
+pub(crate) async fn bytes_handshake(
+    stream: &mut Ws,
+    ticket: &Value,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let bytes = URL_SAFE_NO_PAD.decode(
+        ticket["ticket"]
+            .as_str()
+            .context("File transfer ticket missing")?,
+    )?;
+    ensure!(bytes.len() == 16, "Invalid file transfer ticket");
+    let mut hello = vec![1];
+    hello.extend(bytes);
+    let welcome = tokio::time::timeout(timeout, async {
+        stream.send(Message::Binary(hello.into())).await?;
+        transport::receive(stream).await
+    })
+    .await
+    .context("File transfer handshake timed out")??;
+    ensure!(
+        matches!(welcome, Message::Binary(ref b) if b.len() == 32 && b[0] == 0x81 && b[17..20] == [0, 0, 0] && b[24..32].iter().any(|&n| n != 0)),
+        "File transfer handshake rejected"
+    );
+    Ok(())
 }
 
 pub fn status(phase: Phase, sent: u64, total: u64, error: &str) -> Value {

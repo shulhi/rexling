@@ -582,6 +582,7 @@ internal class RexConnection(application: Application, private val scope: Corout
     }
     fun type(text: String) {
         if (!visible || !state.value.controlled || state.value.creating || navigationRequest.pending || text.isEmpty()) return
+        boundView?.get()?.keyboardPan?.followCursor()
         flushImeComposition()
         val input = TerminalInput.modified(text, controlModifier, altModifier, shiftModifier)
         controlModifier = false; altModifier = false;shiftState=shiftState.consume();keyboardRequest=""

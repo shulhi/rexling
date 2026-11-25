@@ -652,11 +652,11 @@ class TerminalView(context: Context) : View(context) {
         catch (_: SecurityException) {Toast.makeText(context,"Could not share this link",Toast.LENGTH_SHORT).show()}
     }
     internal fun selectedLinkAction(action: TerminalLinkAction): Boolean {
-        val url=selectionLink?.url?.let(TerminalLinks::webUrl) ?: return false
+        val url=selectionLink?.url?.let(TerminalLinks::openableUrl) ?: return false
         when(action) {
             TerminalLinkAction.OPEN->onOpenLink(url)
             TerminalLinkAction.COPY_ADDRESS->(context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-                .setPrimaryClip(ClipData.newPlainText("Web link",url))
+                .setPrimaryClip(ClipData.newPlainText("Terminal link",url))
             TerminalLinkAction.SHARE->onShareLink(url)
         }
         clearSelection();return true
@@ -808,10 +808,12 @@ class TerminalView(context: Context) : View(context) {
                     menu.add(0,0x524504,3,"Copy command").setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
                     menu.add(0,0x524505,4,"Copy output").setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
                 }
-                if(selectionLink!=null) {
-                    menu.add(0,0x524501,2,"Open link").setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
+                selectionLink?.let {link->
+                    val isFile=TerminalLinks.filePath(link.url)!=null
+                    val openLabel=if(isFile) "Download file" else "Open link"
+                    menu.add(0,0x524501,2,openLabel).setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
                     menu.add(0,0x524502,3,"Copy link address").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
-                    menu.add(0,0x524503,4,"Share link").setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
+                    if(!isFile) menu.add(0,0x524503,4,"Share link").setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
                 }
                 return true
             }

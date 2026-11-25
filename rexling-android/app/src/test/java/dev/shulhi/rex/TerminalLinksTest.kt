@@ -19,6 +19,20 @@ class TerminalLinksTest {
             assertNull(value,TerminalLinks.webUrl(value))
         assertTrue(links("nothttps://example.com ftp://www.example.com user@www.example.com").isEmpty())
     }
+    @Test fun terminalFileLinksKeepTheirRemotePathAcrossOsc8AndSoftWraps() {
+        val path="/Users/alex/project/dist/Rexling-arm64-release.apk"
+        val file="file://mac/Users/alex/Build%20Artifacts/Rexling.apk#L1"
+        val osc=cells("Signed APK").map {it.copy(hyperlink=file)}
+        assertEquals(file,TerminalLinks.row(osc,0,200).single().url)
+        assertEquals("/Users/alex/Build Artifacts/Rexling.apk",TerminalLinks.filePath(file))
+        assertEquals(path,TerminalLinks.filePath(links("APK ($path).").single().url))
+        val wrapped=TerminalLinks.Index().update(wrapped(path,18)).flatten()
+        assertEquals(listOf(path),wrapped.mapNotNull {TerminalLinks.filePath(it.url)}.distinct())
+        assertNull(TerminalLinks.filePath("file:///tmp/a%00.apk"))
+        assertNull(TerminalLinks.filePath("file://user@other/tmp/file.apk"))
+        assertNull(TerminalLinks.filePath("https://example.com/download.apk"))
+        assertTrue(links("ftp://example.com/report.pdf").isEmpty())
+    }
     @Test fun sparseAndWideCellsKeepAccurateTapColumns() {
         val prefix=listOf(TerminalCell(0,0,"🦖",-1,0,0,2),TerminalCell(1,0,"",-1,0,0,0))
         val url="https://example.com"
