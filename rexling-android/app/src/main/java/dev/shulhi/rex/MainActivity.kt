@@ -19,6 +19,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -44,6 +45,8 @@ import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -73,9 +76,7 @@ class MainActivity : ComponentActivity() {
             val dark=when(model.appearance) {Appearance.SYSTEM->isSystemInDarkTheme();Appearance.DARK->true;Appearance.LIGHT->false}
             val immersive=model.immersiveStatusBar
             LaunchedEffect(immersive) {window.applyImmersiveStatusBar(immersive)}
-            SideEffect {WindowCompat.getInsetsController(window,window.decorView).apply {
-                isAppearanceLightStatusBars=!dark;isAppearanceLightNavigationBars=!dark
-            }}
+            SideEffect {WindowCompat.getInsetsController(window,window.decorView).isAppearanceLightStatusBars=!dark}
             CompositionLocalProvider(LocalImmersiveStatusBar provides immersive) {
                 RexTheme(dark,model.theme(dark)) {RexApp(model)}
             }
@@ -220,6 +221,7 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
     // Whether the bottom panel shows (it then takes the bottom inset), and whether the terminal row
     // instead extends under the gesture handle: side tabs with the key toolbar hidden.
     val panelShown=state.connected || state.phase=="preview" || client.hasScreen
+    if(!panelShown || model.toolbarWithKeyboardOnly) AppGestureBarContrast(!palette.dark)
     val unfoldedFullScreen=isUnfoldedFullScreen()
     val paneOrientation=currentPaneOrientation()
     val multiplePanes=model.paneLayouts[paneOrientation]==true
@@ -692,8 +694,10 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
     controlled: Boolean,ready: Boolean,keyboardVisible: Boolean,keyTarget: String,toolbarHeight: IntArray,
     onCloseTab: (WindowItem)->Unit,onPaste: ()->Boolean,onKeyboard: ()->Unit,actions: @Composable ()->Unit,
 ) {
+    val navigation=WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)
+    val toolbarCoversNavigation=!model.toolbarWithKeyboardOnly && !extendUnderNav
     Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
-        .then(if(extendUnderNav) Modifier else Modifier.windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)))) {
+        .then(if(extendUnderNav || toolbarCoversNavigation) Modifier else Modifier.windowInsetsPadding(navigation))) {
         if(!sideTabs) TerminalTabs(windows,activeWindowId,state.connected && !state.creating && !changingSession,client::selectWindow,
             panePrograms=client::tabPrograms,selectedPane=client::tabPaneIndex,
             paneTitle={window,pane->state.titles[window.blocks.getOrNull(pane)?.id].orEmpty()},
@@ -708,7 +712,7 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
             },onNewTab=client::createTab,actions=actions)
         Box(Modifier.fillMaxWidth().then(if(model.toolbarWithKeyboardOnly)
             Modifier.keyboardRevealed(WindowInsets.ime,WindowInsets.navigationBars) {toolbarHeight[0]=it} else Modifier)) {
-            KeyboardToolbarTheme(model.toolbarSystemColors,keyboardVisible) {
+            KeyboardToolbarTheme(model.toolbarSystemColors,coverNavigation=toolbarCoversNavigation) {
                 KeyboardBar(controlled,ready,client.controlModifier,client.altModifier,client.shiftModifier,keyboardVisible,
                     client::toggleControl,client::toggleAlt,client::toggleShift,client::pressShift,client::releaseShift,
                     {client.keyForTarget(it,keyTarget)},readable=state.connected,onControlShortcut={client.controlShortcut(it,keyTarget)},
@@ -720,17 +724,70 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
     }
 }
 
-@Composable internal fun KeyboardToolbarTheme(enabled: Boolean,keyboardVisible: Boolean,content: @Composable ()->Unit) {
-    val systemColors=if(enabled && keyboardVisible && Build.VERSION.SDK_INT>=Build.VERSION_CODES.S) {
-        val context=LocalContext.current
-        val configuration=LocalConfiguration.current
-        val dark=isSystemInDarkTheme()
-        remember(context,configuration,dark) {
-            if(dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+@Composable private fun AppGestureBarContrast(useDarkHandle: Boolean) {
+    val window=LocalActivity.current?.window ?: return
+    LaunchedEffect(window,useDarkHandle) {
+        WindowCompat.getInsetsController(window,window.decorView).isAppearanceLightNavigationBars=useDarkHandle
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable internal fun KeyboardToolbarTheme(
+    enabled: Boolean,
+    coverNavigation: Boolean=false,
+    ime: WindowInsets=WindowInsets.ime,
+    source: WindowInsets=WindowInsets.imeAnimationSource,
+    target: WindowInsets=WindowInsets.imeAnimationTarget,
+    navigation: WindowInsets=WindowInsets.navigationBars,
+    content: @Composable ()->Unit,
+) {
+    val navigationPadding=if(coverNavigation) Modifier.windowInsetsPadding(navigation.only(WindowInsetsSides.Bottom)) else Modifier
+    val appDark=LocalTerminalPalette.current.dark
+    if(!enabled || Build.VERSION.SDK_INT<Build.VERSION_CODES.S) {
+        if(coverNavigation) AppGestureBarContrast(!appDark)
+        Box(navigationPadding) {content()}
+        return
+    }
+    val context=LocalContext.current
+    val configuration=LocalConfiguration.current
+    val dark=isSystemInDarkTheme()
+    val systemColors=remember(context,configuration,dark) {
+        if(dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    }
+    val appColors=MaterialTheme.colorScheme
+    val density=LocalDensity.current
+    // Keep the fade in step with the keyboard's movement.
+    val blend by remember(ime,source,target,navigation,density) {
+        derivedStateOf {
+            val nav=navigation.getBottom(density)
+            val current=(ime.getBottom(density)-nav).coerceAtLeast(0)
+            val before=(source.getBottom(density)-nav).coerceAtLeast(0)
+            val after=(target.getBottom(density)-nav).coerceAtLeast(0)
+            when {
+                current==0 -> 0f
+                before>0 && after>0 -> 1f
+                else -> (current.toFloat()/maxOf(1,before,after)).coerceAtMost(1f)
+            }
         }
-    } else null
-    MaterialTheme(colorScheme=systemColors ?: MaterialTheme.colorScheme) {
-        Box(systemColors?.let {Modifier.background(it.surfaceContainer)} ?: Modifier) {content()}
+    }
+    val toolbarColors=when(blend) {
+        0f -> appColors
+        1f -> systemColors
+        else -> appColors.copy(
+            surface=lerp(appColors.surface,systemColors.surface,blend),
+            surfaceVariant=lerp(appColors.surfaceVariant,systemColors.surfaceVariant,blend),
+            surfaceContainer=lerp(appColors.surfaceContainer,systemColors.surfaceContainer,blend),
+            onSurface=lerp(appColors.onSurface,systemColors.onSurface,blend),
+            onSurfaceVariant=lerp(appColors.onSurfaceVariant,systemColors.onSurfaceVariant,blend),
+            primary=lerp(appColors.primary,systemColors.primary,blend),
+            onPrimary=lerp(appColors.onPrimary,systemColors.onPrimary,blend),
+            outline=lerp(appColors.outline,systemColors.outline,blend),
+        )
+    }
+    val background=lerp(appColors.surface,systemColors.surfaceContainer,blend)
+    if(coverNavigation) AppGestureBarContrast(if(blend==0f) !appDark else background.luminance()>.18f)
+    MaterialTheme(colorScheme=toolbarColors) {
+        Box(Modifier.background(background).then(navigationPadding)) {content()}
     }
 }
 

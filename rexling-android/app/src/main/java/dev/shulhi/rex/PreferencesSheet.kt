@@ -106,7 +106,7 @@ import androidx.compose.ui.unit.dp
                         .padding(horizontal=16.dp,vertical=10.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
                         Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(3.dp)) {
                             Text("Use system colors for toolbar",style=SettingsType.row)
-                            Text("Follow Android’s light or dark palette while the keyboard is open.",
+                            Text("Fade to Android’s light or dark palette when the keyboard opens.",
                                 style=SettingsType.detail,color=MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(checked=toolbarSystemColors,onCheckedChange=null)

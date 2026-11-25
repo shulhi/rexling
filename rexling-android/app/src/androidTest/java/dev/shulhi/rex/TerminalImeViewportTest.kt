@@ -2,12 +2,18 @@ package dev.shulhi.rex
 
 import android.view.View
 import android.view.WindowManager
+import android.content.res.Configuration
+import android.os.Build
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
@@ -282,7 +288,9 @@ class TerminalImeViewportTest {
         var visibleHeight=0;var viewportTop=0f;var cursorBottom by mutableStateOf<TerminalKeyboardFocus?>(null)
         var headerHeightSaved=0
         var headerOverlap=0
-        ui.setContent {MaterialTheme {
+        val appSurface=Color.Magenta
+        val toolbarSurfaces=mutableListOf<Color>()
+        ui.setContent {MaterialTheme(colorScheme=lightColorScheme(surface=appSurface)) {
             val ime=WindowInsets.ime;val navigation=WindowInsets.navigationBars
             Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).imePadding()) {
                 SessionHeader(listOf(SessionItem("a","alpha · Mac")),"a",true,true,emptyList(),0,
@@ -294,7 +302,11 @@ class TerminalImeViewportTest {
                         modifier=Modifier.fillMaxSize().terminalImeViewport(ime,navigation,headerHeightSaved={headerHeightSaved},headerOverlap={headerOverlap}) {cursorBottom},
                         update={cursorBottom=it.keyboardFocus})
                 }
-                Spacer(Modifier.height(48.dp))
+                KeyboardToolbarTheme(true) {
+                    val surface=MaterialTheme.colorScheme.surface
+                    SideEffect {if(toolbarSurfaces.lastOrNull()!=surface) toolbarSurfaces+=surface}
+                    Spacer(Modifier.height(48.dp))
+                }
             }
         }}
         ui.runOnIdle {
@@ -318,6 +330,17 @@ class TerminalImeViewportTest {
         ui.runOnIdle {height=view.height;count=dimensions.size;view.keyboard()}
         try {
             waitForKeyboard(height)
+            if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.S) {
+                val context=view.context
+                val night=context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK==Configuration.UI_MODE_NIGHT_YES
+                val systemSurface=(if(night) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)).surface
+                ui.waitUntil(7000) {ui.runOnUiThread {toolbarSurfaces.lastOrNull()==systemSurface}}
+                ui.runOnIdle {
+                    assertEquals(appSurface,toolbarSurfaces.first())
+                    assertTrue("The actual IME transition should produce intermediate toolbar colors: $toolbarSurfaces",
+                        toolbarSurfaces.any {it!=appSurface && it!=systemSurface})
+                }
+            }
             ui.runOnIdle {
                 assertTrue("Keyboard should reduce the visible viewport",visibleHeight<height)
                 assertTrue("The terminal should extend under the collapsed header",headerOverlap>0)
