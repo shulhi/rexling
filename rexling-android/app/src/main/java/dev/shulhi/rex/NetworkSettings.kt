@@ -30,6 +30,7 @@ internal object NetworkSettings {
     val status=MutableStateFlow(JSONObject())
     val revision=MutableStateFlow(0L)
     val sshKeys=MutableStateFlow<List<SshKeyInfo>>(emptyList())
+    private val serverChecks=Dispatchers.IO.limitedParallelism(2)
     val sshKeyBindings=MutableStateFlow<Map<String,String>>(emptyMap())
     private val preferences get()=context.getSharedPreferences("network",Context.MODE_PRIVATE)
     val builtIn get()=preferences.getBoolean("built_in",false)
@@ -56,6 +57,21 @@ internal object NetworkSettings {
     }
     private fun keyLibrary()=SshKeyLibrary(preferences.getString("ssh_library",null))
     fun selectedKey(endpoint: String)=keyLibrary().selected(endpoint)
+    suspend fun checkServer(endpoint: String,route: ServerNetworkRoute,keyId: String?): ServerUrlCheck =
+        withContext(serverChecks) {
+            val response=try {
+                val key=keyId?.let {decrypt(keyLibrary().secret(it))}.orEmpty()
+                JSONObject(NativeBridge.probeServer(endpoint,route==ServerNetworkRoute.BUILTIN,key))
+            } catch(error: Exception) {
+                if(error is CancellationException) throw error
+                return@withContext ServerUrlCheck.Error("Connection check failed")
+            }
+            val failure=response.optString("error")
+            if(failure.isBlank()) ServerUrlCheck.Reachable(response.optString("version","")
+                .takeUnless {response.isNull("version")}.orEmpty().filterNot {it.isISOControl()}.take(100))
+            else ServerUrlCheck.Error(serverCheckFailure(failure))
+        }
+
     fun hasKey(endpoint: String)=selectedKey(endpoint)!=null
     fun keyEndpoints(id: String)=keyLibrary().endpoints(id)
     private fun saveLibrary(library: SshKeyLibrary) {

@@ -17,5 +17,6 @@ object NativeBridge {
     @JvmStatic external fun forwardPoll(handle: Long): String
     @JvmStatic external fun forwardDestroy(handle: Long)
     @JvmStatic external fun networkCommand(request: String): String
+    @JvmStatic external fun probeServer(endpoint: String, builtIn: Boolean, key: String): String
     @JvmStatic external fun destroy(handle: Long)
 }

@@ -55,6 +55,29 @@ object SavedServers {
     fun encode(servers: List<ServerProfile>): String = JSONArray(servers.map {JSONObject().put("id",it.id).put("label",it.label).put("endpoint",it.endpoint).put("icon",it.icon.key)}).toString()
 }
 
+internal sealed interface ServerUrlCheck {
+    data object Editing: ServerUrlCheck
+    data object Checking: ServerUrlCheck
+    data class Reachable(val version: String): ServerUrlCheck
+    data class Error(val reason: String): ServerUrlCheck
+}
+
+internal fun serverCheckFailure(error: String): String {
+    val message=error.lowercase(java.util.Locale.ROOT)
+    return when {
+        "verify this ssh host" in message -> "Verify the SSH host when connecting"
+        "rex is not running" in message -> "Rex is not running on the SSH host"
+        "unable to authenticate" in message -> "SSH authentication failed"
+        "connection refused" in message -> "Connection refused"
+        "timeout" in message || "timed out" in message || "deadline exceeded" in message -> "Timeout"
+        "certificate" in message -> "TLS certificate check failed"
+        "no such host" in message || "name resolution" in message -> "Host not found"
+        "http error: 401" in message || "http error: 403" in message -> "Access denied"
+        "did not negotiate" in message || "http error: 404" in message -> "Rex endpoint not found"
+        else -> "Connection failed"
+    }
+}
+
 data class ServerStatus(val phase: String="disconnected",val error: String="",val version: String="") {
     val connected: Boolean get()=phase=="connected"
     val maintained: Boolean get()=phase in listOf("connected","connecting","reconnecting","paused")

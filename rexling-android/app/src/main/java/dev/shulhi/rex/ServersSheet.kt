@@ -24,9 +24,13 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable internal fun EmptyServerContent(onAdd: ()->Unit) {
@@ -49,7 +53,7 @@ import kotlinx.coroutines.launch
         ChromeButton(ChromeIcon.ADD,"Add server") {revealedServer=null;editing=null;editor=true}
     }) {
         LazyColumn(Modifier.fillMaxWidth().weight(1f,fill=false).heightIn(max=560.dp),state=scroll,
-            contentPadding=PaddingValues(horizontal=16.dp,vertical=8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+            contentPadding=PaddingValues(start=16.dp,end=16.dp,top=8.dp,bottom=28.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
             if(model.servers.isEmpty()) item {
                 Text("Add a Rex server to get started.",Modifier.padding(vertical=12.dp),style=SettingsType.paneDetail,
                     color=MaterialTheme.colorScheme.onSurfaceVariant)
@@ -198,6 +202,24 @@ import kotlinx.coroutines.launch
     val reachable=status.connected && normalized!=null && normalized==server?.endpoint &&
         route==savedRoute && (!ssh || selectedKey==savedKey)
 
+    val checkAllowed=normalized!=null && !busy && !networkOpen
+    val checkingKey=selectedKey.takeIf {ssh}
+    var urlCheck by remember(normalized,route,checkingKey,checkAllowed,tailnetConnected) {
+        mutableStateOf<ServerUrlCheck>(ServerUrlCheck.Editing)
+    }
+    LaunchedEffect(normalized,route,checkingKey,checkAllowed,tailnetConnected,reachable) {
+        if(normalized==null || !checkAllowed || reachable) return@LaunchedEffect
+        urlCheck=ServerUrlCheck.Editing
+        delay(700)
+        if(route==ServerNetworkRoute.BUILTIN && !tailnetConnected) {
+            urlCheck=ServerUrlCheck.Error("Connect to built-in Tailscale first")
+        } else {
+            urlCheck=ServerUrlCheck.Checking
+            urlCheck=NetworkSettings.checkServer(normalized,route,checkingKey)
+        }
+    }
+    val urlState=if(reachable) ServerUrlCheck.Reachable(status.version) else urlCheck
+
     fun save() {
         if(busy) return
         val profile=runCatching {ServerProfile.create(name,endpoint,icon=icon)}.getOrElse {error=it.message;return}
@@ -244,28 +266,18 @@ import kotlinx.coroutines.launch
         }) {
         HorizontalDivider(color=colors.outlineVariant.copy(alpha=.55f))
         Column(Modifier.fillMaxWidth().weight(1f,fill=false).heightIn(max=560.dp).verticalScroll(scroll)
-            .padding(horizontal=16.dp).padding(top=12.dp,bottom=12.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+            .padding(horizontal=16.dp).padding(top=12.dp,bottom=if(server==null) 28.dp else 12.dp),
+            verticalArrangement=Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(10.dp),verticalAlignment=Alignment.CenterVertically) {
                 ServerIconPicker(icon,compact=true,enabled=!busy) {icon=it}
                 OutlinedTextField(name,{name=it;error=null},Modifier.weight(1f),label={Text("Name")},singleLine=true,
                     enabled=!busy,textStyle=SettingsType.body,shape=shape)
             }
-            Column {
-                OutlinedTextField(endpoint,{endpoint=it;error=null},Modifier.fillMaxWidth(),label={Text("Server URL")},singleLine=true,
-                    enabled=!busy,textStyle=SettingsType.body.copy(fontFamily=MonoUi),shape=shape,
-                    keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Uri),
-                    placeholder={Text("https://host.tailnet.ts.net",style=SettingsType.detail,fontFamily=MonoUi)},
-                    supportingText={Text("HTTPS address or ssh://user@host",style=SettingsType.detail)})
-                if(reachable) {
-                    val green=if(LocalTerminalPalette.current.dark) Color(0xff73cd87) else Color(0xff217638)
-                    Row(Modifier.padding(start=16.dp,end=16.dp,top=3.dp),verticalAlignment=Alignment.CenterVertically,
-                        horizontalArrangement=Arrangement.spacedBy(6.dp)) {
-                        ChromeSymbol(ChromeIcon.CHECK,Modifier.size(16.dp),green)
-                        Text(listOfNotNull("Reachable",status.version.takeIf {it.isNotBlank()}?.let {"Rex $it"}).joinToString(" · "),
-                            style=SettingsType.detail,color=green)
-                    }
-                }
-            }
+            OutlinedTextField(endpoint,{endpoint=it;error=null},Modifier.fillMaxWidth(),label={Text("Server URL")},singleLine=true,
+                enabled=!busy,isError=urlState is ServerUrlCheck.Error,textStyle=SettingsType.body.copy(fontFamily=MonoUi),shape=shape,
+                keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Uri),
+                placeholder={Text("https://host.tailnet.ts.net",style=SettingsType.detail,fontFamily=MonoUi)},
+                supportingText={ServerUrlStatus(urlState)})
             if(normalized!=null) {
                 Column {
                     ExposedDropdownMenuBox(routesOpen,{if(!busy) routesOpen=it}) {
@@ -303,6 +315,40 @@ import kotlinx.coroutines.launch
     if(confirmRemove && onRemove!=null && server!=null) {
         ServerConfirmationDialog(server,ServerConfirmation.REMOVE,onCancel={confirmRemove=false},
             onConfirm={confirmRemove=false;onRemove();onClose()})
+    }
+}
+
+@Composable private fun ServerUrlStatus(status: ServerUrlCheck) {
+    val colors=MaterialTheme.colorScheme
+    val green=if(LocalTerminalPalette.current.dark) Color(0xff73cd87) else Color(0xff217638)
+    when(status) {
+        ServerUrlCheck.Editing -> Text("HTTPS address or ssh://user@host",style=SettingsType.detail)
+        else -> Row(Modifier.padding(top=4.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+            when(status) {
+                ServerUrlCheck.Checking -> {
+                    CircularProgressIndicator(Modifier.size(14.dp),strokeWidth=1.5.dp,color=colors.onSurfaceVariant)
+                    Text("Checking…",style=SettingsType.detail,color=colors.onSurfaceVariant)
+                }
+                is ServerUrlCheck.Reachable -> {
+                    Box(Modifier.size(16.dp).border(1.dp,green,CircleShape),contentAlignment=Alignment.Center) {
+                        ChromeSymbol(ChromeIcon.CHECK,Modifier.size(10.dp),green)
+                    }
+                    Text(buildAnnotatedString {
+                        withStyle(SpanStyle(color=green)) {append("Reachable")}
+                        if(status.version.isNotBlank()) withStyle(SpanStyle(color=colors.onSurfaceVariant)) {
+                            append(" · Rex ${status.version}")
+                        }
+                    },style=SettingsType.detail)
+                }
+                is ServerUrlCheck.Error -> {
+                    Box(Modifier.size(14.dp).border(1.dp,colors.error,CircleShape),contentAlignment=Alignment.Center) {
+                        Text("!",style=SettingsType.paneDetail,color=colors.error)
+                    }
+                    Text("Can’t reach server · ${status.reason}",style=SettingsType.detail,color=colors.error)
+                }
+                ServerUrlCheck.Editing -> Unit
+            }
+        }
     }
 }
 

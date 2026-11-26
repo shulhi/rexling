@@ -214,6 +214,10 @@ func networkDial(ctx context.Context, endpoint string, address string) (net.Conn
 	state.Lock()
 	builtIn := state.config.builtInFor(endpoint)
 	state.Unlock()
+	return dialNetwork(ctx, builtIn, address)
+}
+
+func dialNetwork(ctx context.Context, builtIn bool, address string) (net.Conn, error) {
 	if builtIn {
 		server, err := tailServer()
 		if err != nil {
@@ -277,16 +281,8 @@ func sshClient(ctx context.Context, u *url.URL) (*ssh.Client, error) {
 	if cached != nil {
 		return cached, nil
 	}
-	user := ""
-	if u.User != nil {
-		user = u.User.Username()
-	}
-	if user == "" {
-		return nil, errors.New("include the SSH username, such as ssh://alice@host")
-	}
-	config := &ssh.ClientConfig{User: user, Timeout: 20 * time.Second}
 	identity := hostIdentity(u)
-	config.HostKeyCallback = func(_ string, _ net.Addr, key ssh.PublicKey) error {
+	hostKey := func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		fingerprint := ssh.FingerprintSHA256(key)
 		state.Lock()
 		defer state.Unlock()
@@ -298,35 +294,18 @@ func sshClient(ctx context.Context, u *url.URL) (*ssh.Client, error) {
 		state.prompts[identity] = hostPrompt{Host: identity, Fingerprint: fingerprint, Previous: trusted, Type: key.Type()}
 		return errors.New("review the SSH host fingerprint in Rexling")
 	}
-	config.BannerCallback = func(message string) error {
+	banner := func(message string) error {
 		state.Lock()
 		state.banners[endpoint] = message
 		state.Unlock()
 		return nil
 	}
-	if credential.Key != "" {
-		signer, err := ssh.ParsePrivateKey([]byte(credential.Key))
-		if err != nil {
-			return nil, errors.New("could not read the saved SSH key")
-		}
-		config.Auth = []ssh.AuthMethod{ssh.PublicKeys(signer)}
-	}
-	connection, err := networkDial(ctx, endpoint, identity)
+	client, err := openSSH(ctx, u, credential.Key, hostKey, banner, func(ctx context.Context, address string) (net.Conn, error) {
+		return networkDial(ctx, endpoint, address)
+	})
 	if err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(25 * time.Second)
-	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {
-		deadline = limit
-	}
-	connection.SetDeadline(deadline)
-	transport, channels, requests, err := ssh.NewClientConn(connection, identity, config)
-	if err != nil {
-		connection.Close()
-		return nil, fmt.Errorf("SSH login failed: %w", err)
-	}
-	connection.SetDeadline(time.Time{})
-	client := ssh.NewClient(transport, channels, requests)
 	state.Lock()
 	if generation != state.generation {
 		state.Unlock()
@@ -343,7 +322,44 @@ func sshClient(ctx context.Context, u *url.URL) (*ssh.Client, error) {
 	state.Unlock()
 	return client, nil
 }
-func rexSocket(ctx context.Context, client *ssh.Client, u *url.URL) (string, error) {
+func openSSH(ctx context.Context, u *url.URL, key string, hostKey ssh.HostKeyCallback, banner ssh.BannerCallback,
+	dial func(context.Context, string) (net.Conn, error)) (*ssh.Client, error) {
+	user := ""
+	if u.User != nil {
+		user = u.User.Username()
+	}
+	if user == "" {
+		return nil, errors.New("include the SSH username, such as ssh://alice@host")
+	}
+	config := &ssh.ClientConfig{User: user, Timeout: 20 * time.Second}
+	identity := hostIdentity(u)
+	config.HostKeyCallback = hostKey
+	config.BannerCallback = banner
+	if key != "" {
+		signer, err := ssh.ParsePrivateKey([]byte(key))
+		if err != nil {
+			return nil, errors.New("could not read the saved SSH key")
+		}
+		config.Auth = []ssh.AuthMethod{ssh.PublicKeys(signer)}
+	}
+	connection, err := dial(ctx, identity)
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(25 * time.Second)
+	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {
+		deadline = limit
+	}
+	connection.SetDeadline(deadline)
+	transport, channels, requests, err := ssh.NewClientConn(connection, identity, config)
+	if err != nil {
+		connection.Close()
+		return nil, fmt.Errorf("SSH login failed: %w", err)
+	}
+	connection.SetDeadline(time.Time{})
+	return ssh.NewClient(transport, channels, requests), nil
+}
+func rexSocket(ctx context.Context, client *ssh.Client, u *url.URL, probe bool) (string, error) {
 	if u.Path != "" && u.Path != "/" {
 		return u.Path, nil
 	}
@@ -355,8 +371,16 @@ func rexSocket(ctx context.Context, client *ssh.Client, u *url.URL) (string, err
 	stop := context.AfterFunc(ctx, func() { session.Close() })
 	defer stop()
 	// Match Rex's CLI discovery. No user text is interpolated into the command.
-	output, err := session.Output(`sh -c 'if command -v rex >/dev/null 2>&1; then r=rex; elif test -x "$HOME/.local/bin/rex"; then r="$HOME/.local/bin/rex"; else echo "Rex is not installed on this SSH host" >&2; exit 127; fi; case "${REX_AUTOSTART-}" in ""|1|t|T|true|TRUE|True) "$r" server start --json;; *) "$r" server status --json;; esac'`)
+	const locate = `sh -c 'if command -v rex >/dev/null 2>&1; then r=rex; elif test -x "$HOME/.local/bin/rex"; then r="$HOME/.local/bin/rex"; else echo "Rex is not installed on this SSH host" >&2; exit 127; fi; `
+	command := locate + `case "${REX_AUTOSTART-}" in ""|1|t|T|true|TRUE|True) "$r" server start --json;; *) "$r" server status --json;; esac'`
+	if probe {
+		command = locate + `"$r" --autostart=false server status --json'`
+	}
+	output, err := session.Output(command)
 	if err != nil {
+		if probe {
+			return "", errors.New("Rex is not running on this SSH host")
+		}
 		return "", errors.New("could not find or start Rex over SSH; install Rex on the host")
 	}
 	var status struct {
@@ -381,7 +405,7 @@ func dial(ctx context.Context, endpoint string) (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		path, err := rexSocket(ctx, client, u)
+		path, err := rexSocket(ctx, client, u, false)
 		if err == nil {
 			var conn net.Conn
 			conn, err = client.DialContext(ctx, "unix", path)
@@ -397,6 +421,10 @@ func dial(ctx context.Context, endpoint string) (net.Conn, error) {
 		client.Close()
 		return nil, err
 	}
+	return networkDial(ctx, endpoint, serverAddress(u))
+}
+
+func serverAddress(u *url.URL) string {
 	port := u.Port()
 	if port == "" {
 		if u.Scheme == "https" || u.Scheme == "wss" {
@@ -405,8 +433,66 @@ func dial(ctx context.Context, endpoint string) (net.Conn, error) {
 			port = "80"
 		}
 	}
-	return networkDial(ctx, endpoint, net.JoinHostPort(u.Hostname(), port))
+	return net.JoinHostPort(u.Hostname(), port)
 }
+
+type probeOptions struct {
+	BuiltIn bool   `json:"builtin"`
+	Key     string `json:"key"`
+}
+
+type probeSSHConn struct {
+	net.Conn
+	client *ssh.Client
+}
+
+func (c probeSSHConn) Close() error {
+	err := c.Conn.Close()
+	c.client.Close()
+	return err
+}
+
+func dialProbe(ctx context.Context, endpoint string, options probeOptions) (net.Conn, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme != "ssh" {
+		return dialNetwork(ctx, options.BuiltIn, serverAddress(u))
+	}
+	identity := hostIdentity(u)
+	state.Lock()
+	trusted := state.config.Trusted[identity]
+	state.Unlock()
+	// Only saved host trust is used. A draft never creates a trust prompt or a cached client.
+	if trusted == "" {
+		return nil, errors.New("verify this SSH host when connecting")
+	}
+	client, err := openSSH(ctx, u, options.Key, func(_ string, _ net.Addr, key ssh.PublicKey) error {
+		if ssh.FingerprintSHA256(key) != trusted {
+			return errors.New("verify this SSH host when connecting")
+		}
+		return nil
+	}, nil, func(ctx context.Context, address string) (net.Conn, error) {
+		return dialNetwork(ctx, options.BuiltIn, address)
+	})
+	if err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { client.Close() })
+	defer stop()
+	path, err := rexSocket(ctx, client, u, true)
+	if err == nil {
+		conn, dialErr := client.DialContext(ctx, "unix", path)
+		if dialErr == nil {
+			return probeSSHConn{conn, client}, nil
+		}
+		err = dialErr
+	}
+	client.Close()
+	return nil, err
+}
+
 func status() map[string]any {
 	state.Lock()
 	builtIn := state.config.tailscaleEnabled()
@@ -518,6 +604,23 @@ func rexnet_dial(raw *C.char, milliseconds C.int, errorOut **C.char) C.int {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(milliseconds)*time.Millisecond)
 	defer cancel()
 	connection, err := dial(ctx, C.GoString(raw))
+	return relay(connection, err, errorOut)
+}
+
+//export rexnet_probe_dial
+func rexnet_probe_dial(raw *C.char, options *C.char, milliseconds C.int, errorOut **C.char) C.int {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(milliseconds)*time.Millisecond)
+	defer cancel()
+	var draft probeOptions
+	err := json.Unmarshal([]byte(C.GoString(options)), &draft)
+	if err != nil {
+		return relay(nil, err, errorOut)
+	}
+	connection, err := dialProbe(ctx, C.GoString(raw), draft)
+	return relay(connection, err, errorOut)
+}
+
+func relay(connection net.Conn, err error, errorOut **C.char) C.int {
 	if err != nil {
 		*errorOut = C.CString(err.Error())
 		return -1

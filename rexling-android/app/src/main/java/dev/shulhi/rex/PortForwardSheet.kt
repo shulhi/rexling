@@ -7,6 +7,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.semantics.semantics
@@ -30,12 +33,13 @@ import dev.chrisbanes.haze.HazeState
     onAdd: (ForwardServer,String,Int,Int)->Unit) {
     val context=LocalContext.current
     var editing by remember {mutableStateOf(false)}
+    val listState=rememberLazyListState()
     val canAdd=servers.any {it.connected && it.session.isNotBlank()} && PortForwards.items.size<64
     // Built outside the sheet on purpose: the frost redraws when its host window draws, and inside the
     // sheet that host is the sheet's own window, which then redraws itself every frame while open.
     val frost=Modifier.drawerFrost(hazeState,BottomSheetDefaults.ExpandedShape)
-    DrawerSheet(onClose) {dismiss->
-        Column(frost.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom)).padding(bottom=4.dp)) {
+    if(!editing) DrawerSheet(onClose) {dismiss->
+        Column(frost.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
             DrawerHandle(dismiss)
             Row(Modifier.fillMaxWidth().heightIn(min=48.dp).padding(start=16.dp,end=4.dp),verticalAlignment=Alignment.CenterVertically) {
                 Text("Port forwarding",Modifier.weight(1f),style=SettingsType.row,fontWeight=FontWeight.Bold)
@@ -51,7 +55,7 @@ import dev.chrisbanes.haze.HazeState
                 Text("Tap a localhost link in a terminal, or add a forward.",Modifier.padding(16.dp),style=SettingsType.detail)
                 TextButton(onClick={editing=true},enabled=canAdd,modifier=Modifier.padding(horizontal=8.dp)) {Text("Add port forward")}
             }
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max=440.dp),contentPadding=PaddingValues(horizontal=16.dp,vertical=8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max=440.dp),state=listState,contentPadding=PaddingValues(start=16.dp,end=16.dp,top=8.dp,bottom=28.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
                 PortForwards.items.groupBy {it.serverId.ifBlank {it.endpoint}}.forEach {(serverId,entries)->
                     item(key="server:$serverId") {
                         val profile=servers.firstOrNull {it.profile.id==serverId}?.profile
@@ -107,8 +111,14 @@ import dev.chrisbanes.haze.HazeState
     }
     if(editing) ForwardEditor(servers,selectedServer,onClose={editing=false}) {target,host,port,local->editing=false;onAdd(target,host,port,local)}
 }
-@Composable private fun ForwardEditor(servers: List<ForwardServer>,selectedServer: String,onClose: ()->Unit,onSave: (ForwardServer,String,Int,Int)->Unit) {
-    var serverId by remember {mutableStateOf(servers.firstOrNull {it.profile.id==selectedServer && it.connected && it.session.isNotBlank()}?.profile?.id ?: servers.firstOrNull {it.connected && it.session.isNotBlank()}?.profile?.id)}
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable private fun ForwardEditor(
+    servers: List<ForwardServer>,selectedServer: String,onClose: ()->Unit,onSave: (ForwardServer,String,Int,Int)->Unit,
+) {
+    var serverId by remember {
+        val available=servers.filter {it.connected && it.session.isNotBlank()}
+        mutableStateOf((available.firstOrNull {it.profile.id==selectedServer} ?: available.firstOrNull())?.profile?.id)
+    }
     var serverMenu by remember {mutableStateOf(false)}
     val server=servers.firstOrNull {it.profile.id==serverId}
     var host by remember {mutableStateOf("127.0.0.1")}
@@ -116,29 +126,61 @@ import dev.chrisbanes.haze.HazeState
     var local by remember {mutableStateOf("")}
     var error by remember {mutableStateOf<String?>(null)}
     var advanced by remember {mutableStateOf(false)}
-    AlertDialog(onDismissRequest=onClose,title={Text("Add port forward",style=SettingsType.title)},text={
-        Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
-            Box {
-                TextButton(onClick={serverMenu=true}) {server?.let {ServerGlyph(it.profile.icon,Modifier.size(18.dp));Spacer(Modifier.width(8.dp))};Text("${server?.profile?.label ?: "Choose server"} ▾")}
-                DropdownMenu(serverMenu,{serverMenu=false}) {
-                    servers.forEach {target->DropdownMenuItem(text={Text(target.profile.label+if(!target.connected || target.session.isBlank()) " · connect first" else "")},
-                        leadingIcon={ServerGlyph(target.profile.icon,Modifier.size(19.dp))},enabled=target.connected && target.session.isNotBlank(),onClick={serverId=target.profile.id;serverMenu=false})}
-                }
-            }
-            OutlinedTextField(port,{port=it;error=null},label={Text("Remote port")},singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Number))
-            TextButton(onClick={advanced=!advanced},contentPadding=PaddingValues(horizontal=0.dp)) {Text(if(advanced) "Hide advanced" else "Advanced")}
-            if(advanced) {
-                OutlinedTextField(host,{host=it;error=null},label={Text("Remote host")},singleLine=true)
-                OutlinedTextField(local,{local=it;error=null},label={Text("Phone port")},placeholder={Text("Same as remote port")},supportingText={Text("Use 0 to choose an available port.",style=SettingsType.detail)},singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Number))
-            }
-            error?.let {Text(it,style=SettingsType.detail,color=MaterialTheme.colorScheme.error)}
-        }
-    },confirmButton={TextButton(onClick={
-        val remote=port.toIntOrNull();val localPort=if(local.isBlank()) remote else local.toIntOrNull()
+    val colors=MaterialTheme.colorScheme
+    val shape=RoundedCornerShape(10.dp)
+
+    fun forward() {
+        val remote=port.toIntOrNull()
+        val localPort=if(local.isBlank()) remote else local.toIntOrNull()
         val name=host.trim().removeSurrounding("[","]")
         if(remote==null || remote !in 1..65535 || localPort==null || localPort !in 0..65535) error="Enter valid ports from 1 to 65535."
         else if(name.isBlank() || name.length>253 || name.any {it.isWhitespace() || it=='/' || it.isISOControl()}) error="Enter a hostname or IP address."
         else if(server==null || !server.connected || server.session.isBlank()) error="Connect a server first."
         else onSave(server,name,remote,localPort)
-    }) {Text("Forward")}},dismissButton={TextButton(onClick=onClose) {Text("Cancel")}})
+    }
+
+    SettingsDrawer("Add port forward","Close port forward editor",onClose,
+        onBack=onClose,backDescription="Back to port forwarding",surfaceColor=colors.surface,showClose=false,
+        headerActions={
+            Button(::forward,modifier=Modifier.padding(end=8.dp),
+                contentPadding=PaddingValues(horizontal=16.dp,vertical=6.dp)) {
+                Text("Forward",style=SettingsType.row)
+            }
+        }) {
+        HorizontalDivider(color=colors.outlineVariant.copy(alpha=.55f))
+        Column(Modifier.fillMaxWidth().weight(1f,fill=false).heightIn(max=560.dp)
+            .verticalScroll(rememberScrollState()).padding(horizontal=16.dp).padding(top=12.dp,bottom=28.dp),
+            verticalArrangement=Arrangement.spacedBy(10.dp)) {
+            ExposedDropdownMenuBox(serverMenu,{serverMenu=it}) {
+                OutlinedTextField(server?.profile?.label.orEmpty(),{},Modifier.fillMaxWidth()
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                    readOnly=true,singleLine=true,label={Text("Server")},shape=shape,textStyle=SettingsType.body,
+                    placeholder={Text("Choose server",style=SettingsType.detail)},
+                    leadingIcon={server?.let {ServerGlyph(it.profile.icon,Modifier.size(20.dp))}},
+                    trailingIcon={ExposedDropdownMenuDefaults.TrailingIcon(serverMenu)})
+                ExposedDropdownMenu(serverMenu,{serverMenu=false}) {
+                    servers.forEach {target->
+                        val available=target.connected && target.session.isNotBlank()
+                        DropdownMenuItem(text={Text(target.profile.label+if(available) "" else " · connect first",style=SettingsType.row)},
+                            leadingIcon={ServerGlyph(target.profile.icon,Modifier.size(19.dp))},enabled=available,
+                            onClick={serverId=target.profile.id;serverMenu=false;error=null})
+                    }
+                }
+            }
+            OutlinedTextField(port,{port=it;error=null},Modifier.fillMaxWidth(),label={Text("Remote port")},singleLine=true,
+                shape=shape,textStyle=SettingsType.body.copy(fontFamily=MonoUi),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Number))
+            TextButton(onClick={advanced=!advanced},contentPadding=PaddingValues(horizontal=12.dp)) {
+                Text(if(advanced) "Hide advanced" else "Advanced",style=SettingsType.row)
+            }
+            if(advanced) {
+                OutlinedTextField(host,{host=it;error=null},Modifier.fillMaxWidth(),label={Text("Remote host")},singleLine=true,
+                    shape=shape,textStyle=SettingsType.body.copy(fontFamily=MonoUi))
+                OutlinedTextField(local,{local=it;error=null},Modifier.fillMaxWidth(),label={Text("Phone port")},
+                    placeholder={Text("Same as remote port",style=SettingsType.detail)},
+                    supportingText={Text("Use 0 to choose an available port.",style=SettingsType.detail)},singleLine=true,
+                    shape=shape,textStyle=SettingsType.body.copy(fontFamily=MonoUi),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Number))
+            }
+            error?.let {Text(it,style=SettingsType.detail,color=colors.error)}
+        }
+    }
 }

@@ -158,6 +158,40 @@ func TestSSHTrustAuthenticationAndStream(t *testing.T) {
 		})
 	}
 }
+func TestDraftSSHProbeUsesItsOwnRouteAndKeyWithoutChangingSavedState(t *testing.T) {
+	endpoint, key, fingerprint := testSSH(t, true)
+	u, _ := url.Parse(endpoint)
+	identity := hostIdentity(u)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	reset(t, configuration{})
+	defer reset(t, configuration{})
+	if _, err := dialProbe(ctx, endpoint, probeOptions{Key: key}); err == nil {
+		t.Fatal("draft trusted an unknown host")
+	}
+	state.Lock()
+	prompts := len(state.prompts)
+	state.Unlock()
+	if prompts != 0 {
+		t.Fatal("a draft created a host trust prompt")
+	}
+	reset(t, configuration{
+		Suspended: true,
+		Routes:    map[string]string{endpoint: "builtin"},
+		Trusted:   map[string]string{identity: fingerprint},
+	})
+	connection, err := dialProbe(ctx, endpoint, probeOptions{Key: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection.Close()
+	state.Lock()
+	defer state.Unlock()
+	if !state.config.builtInFor(endpoint) || len(state.config.SSH) != 0 || len(state.clients) != 0 {
+		t.Fatal("draft changed the saved route, credentials, or cached clients")
+	}
+}
+
 func TestConfigurationRejectsUnsafeControlURL(t *testing.T) {
 	for _, value := range []string{"ftp://host", "https://user:secret@host", "https://host?token=x", "garbage"} {
 		if configure(configuration{Directory: t.TempDir(), ControlURL: value}) == nil {

@@ -25,6 +25,10 @@ class PortForwardTest {
             PortForwardSheet(listOf(ForwardServer(ServerProfile.create("Test server","http://127.0.0.1:19701","test"),"session:test",true)),"test",null,{}) {_,host,port,local->chosen.set(Triple(host,port,local))}
         }}
         compose.onNodeWithContentDescription("Add port forward").performClick()
+        compose.onNodeWithText("Port forwarding").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Back to port forwarding").performClick()
+        compose.onNodeWithText("Port forwarding").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Add port forward").performClick()
         compose.onNodeWithText("Remote host").assertDoesNotExist()
         compose.onNodeWithText("Phone port").assertDoesNotExist()
         compose.onNodeWithText("Forward",useUnmergedTree=true).performClick()
@@ -32,6 +36,7 @@ class PortForwardTest {
         compose.onNodeWithText("Remote port").performTextInput("3000")
         compose.onNodeWithText("Forward",useUnmergedTree=true).performClick()
         compose.runOnIdle {assertEquals(Triple("127.0.0.1",3000,3000),chosen.get())}
+        compose.onNodeWithText("Port forwarding").assertIsDisplayed()
     }
     @Test fun magicLinksKeepPortsReuseRestartAndFallBackAroundOtherApps() {
         val instrumentation=InstrumentationRegistry.getInstrumentation();val args=InstrumentationRegistry.getArguments()

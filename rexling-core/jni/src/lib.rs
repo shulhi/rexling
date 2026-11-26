@@ -211,3 +211,36 @@ pub extern "system" fn Java_dev_shulhi_rex_NativeBridge_networkCommand(mut env: 
     let response = match result {Ok(Ok(v))=>v,Ok(Err(e))=>serde_json::json!({"error":e.to_string()}).to_string(),Err(_)=>"{\"error\":\"Network command failed\"}".into()};
     string(&mut env,response)
 }
+
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shulhi_rex_NativeBridge_probeServer(
+    mut env: JNIEnv, _class: JClass, endpoint: JString, built_in: jni::sys::jboolean, key: JString,
+) -> jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> anyhow::Result<serde_json::Value> {
+        let endpoint: String = env.get_string(&endpoint)?.into();
+        let key: String = env.get_string(&key)?.into();
+        use std::time::Duration;
+        let endpoint = rex_core::transport::Endpoint::new(&endpoint, Duration::from_secs(4))?;
+        #[cfg(target_os = "android")]
+        let endpoint = endpoint.with_probe_options(built_in != 0, &key);
+        #[cfg(not(target_os = "android"))]
+        let _ = (built_in, key);
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+        let result = runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                let mut control = rex_core::control::Control::connect(endpoint, None, Default::default()).await?;
+                let version = control.call("server.version", serde_json::json!({})).await?;
+                Ok::<_, anyhow::Error>(version)
+            }).await?
+        });
+        runtime.shutdown_background();
+        result
+    }));
+    let response = match result {
+        Ok(Ok(version)) => serde_json::json!({"version":version["rex_version"]}),
+        Ok(Err(error)) => serde_json::json!({"error":format!("{error:#}")}),
+        Err(_) => serde_json::json!({"error":"Connection check failed"}),
+    };
+    string(&mut env,response.to_string())
+}
