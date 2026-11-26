@@ -38,6 +38,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -433,6 +434,8 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
                             {model.showActivity(true)},{picker="tabs"},attentionCount=activityBadges.elsewhere,
                             vertical=vertical,keyboard=keyboardAction)
                     }
+                    val railBackdrop=remember(tabLayout.position) {PaneSwipeBackdrop(tabLayout.position)}
+                    val swipeBackdrop=railBackdrop.takeIf {tabLayout.side && tiles==null && carouselBlocks.size>1}
                     val tabRail: @Composable ()->Unit={
                         TerminalTabRail(windows,activeWindowId,state.connected&&!state.creating&&!changingSession,client::selectWindow,client::tabPrograms,client::tabPaneIndex,
                             tabLayout.position,tabLayout.style,paneTitle={w,pane->state.titles[w.blocks.getOrNull(pane)?.id].orEmpty()},paneWorking={w->w.blocks.any {it.id in state.workingBlocks}},
@@ -442,11 +445,12 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
                             onStyle={model.changeTabLayout(tabWidth.first,tabLayout.copy(style=it))},extendUnderNav=extendUnderNav,
                             onNewTab=client::createTab,windowWidthDp=tabWidth.second,
                             sessions=TabRailSessions(model.sessionTargets,currentSessionKey,model::selectSessionTarget),
-                            headerOverlap=currentHeaderOverlap) {
+                            headerOverlap=currentHeaderOverlap,swipeBackdrop=railBackdrop,hazeState=terminalHaze) {
                             tabActions(tabLayout.style==TabRailStyle.ICONS)
                         }
                     }
-                    if(blocks.isNotEmpty()) Row(Modifier.weight(1f).fillMaxWidth()) {
+                    if(blocks.isNotEmpty()) Row(Modifier.weight(1f).fillMaxWidth()
+                        .then(if(swipeBackdrop==null) Modifier else Modifier.clipToBounds())) {
                         if(tabLayout.position==TabBarPosition.LEFT) tabRail()
                         val paneCoordinates=remember {arrayOfNulls<LayoutCoordinates>(1)}
                         val viewLocation=remember {IntArray(2)}
@@ -514,7 +518,7 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
                             keyboardChrome={if(model.toolbarWithKeyboardOnly) toolbarHeight[0] else 0},
                             headerHeightSaved=currentHeaderSavings,headerOverlap=currentHeaderOverlap,
                             squareCorners=squarePaneCorners,extendsUnderNavigation=extendUnderNav,
-                            navigationClearance=singlePaneNavigationClearance,bottomOverlayInset=bottomOverlayInset,floatingMotion=floatingMotion)
+                            navigationClearance=singlePaneNavigationClearance,bottomOverlayInset=bottomOverlayInset,floatingMotion=floatingMotion,swipeBackdrop=swipeBackdrop)
                         if(showSinglePaneActions && window!=null && singlePane!=null) {
                             val placement=window.layout.firstOrNull {it.id==singlePane.id}
                             val tiledCount=window.layout.count {!it.floating}
@@ -877,12 +881,12 @@ private fun getClipboard(context: Context)=context.getSystemService(Context.CLIP
     onInput: (String)->Unit,onScroll: (Int)->Unit,onWheel: (Int,Int,Int,Int,Int)->Unit,onActivate: (Boolean)->Unit,onBottom: ()->Unit,onDimensions: (Int,Int)->Unit,
     onSelect: (String)->Unit,onPanes: ()->Unit,onView: (TerminalView)->Unit,modifier: Modifier=Modifier,
     floatingDock: Boolean=false,paneLayout: List<PanePlacement> = emptyList(),titles: Map<String,String> = emptyMap(),directories: Map<String,String> = emptyMap(),hazeState: HazeState?=null,captureBackdrop: Boolean=false,onImage: (android.net.Uri,()->Unit)->Boolean={_,release->release();false},onPaste: ()->Boolean={false},imeEnterSubmits: Boolean=false,keyboardChrome: ()->Int={0},squareCorners: Boolean=false,extendsUnderNavigation: Boolean=false,
-    navigationClearance: Dp=0.dp,bottomOverlayInset: Dp=0.dp,headerHeightSaved: ()->Int={0},headerOverlap: ()->Int={0},floatingMotion: FloatingPaneMotion?=null) {
+    navigationClearance: Dp=0.dp,bottomOverlayInset: Dp=0.dp,headerHeightSaved: ()->Int={0},headerOverlap: ()->Int={0},floatingMotion: FloatingPaneMotion?=null,swipeBackdrop: PaneSwipeBackdrop?=null) {
     val layout by client.displayLayout.collectAsState()
     val screen=client.screenForLayout(layout)
     TerminalCarousel(blocks,chosen,liveBlock,screen,{client.paneFrames[it]},programs,controlled,fontSize,
         onInput,onScroll,onWheel,onActivate,onBottom,onDimensions,onSelect,onPanes,onView,modifier,client::bindTerminalView,onMouseClick=client::click,mouseTarget=client::keyTarget,onImage=onImage,onPaste=onPaste,imageTarget=client::imageInputTarget,bottomControlsInset=if(floatingDock) 56.dp else 0.dp,paneLayout=paneLayout,titles=titles,directories=directories,hazeState=hazeState,captureBackdrop=captureBackdrop,imeEnterSubmits=imeEnterSubmits,keyboardChrome=keyboardChrome,squareCorners=squareCorners,extendsUnderNavigation=extendsUnderNavigation,
-        navigationClearance=navigationClearance,bottomOverlayInset=bottomOverlayInset,headerHeightSaved=headerHeightSaved,headerOverlap=headerOverlap,floatingMotion=floatingMotion)
+        navigationClearance=navigationClearance,bottomOverlayInset=bottomOverlayInset,headerHeightSaved=headerHeightSaved,headerOverlap=headerOverlap,floatingMotion=floatingMotion,swipeBackdrop=swipeBackdrop)
 }
 
 @Composable private fun BackgroundAlertsDialog(model: RexModel,hazeState: HazeState?=null,onClose: ()->Unit) {

@@ -39,6 +39,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.zIndex
+import dev.chrisbanes.haze.HazeState
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -113,7 +117,7 @@ private const val sidebarTransitionMillis=180
     paneProgress: (WindowItem)->TerminalProgress?={null},tabAttention: (WindowItem)->Int={0},animateWorking: Boolean=true,
     onStyle: (TabRailStyle)->Unit={},extendUnderNav: Boolean=false,onNewTab: (() -> Unit)?=null,
     windowWidthDp: Int=0,sessions: TabRailSessions?=null,headerOverlap: ()->Int={0},
-    actions: @Composable ()->Unit) {
+    swipeBackdrop: PaneSwipeBackdrop?=null,hazeState: HazeState?=null,actions: @Composable ()->Unit) {
     val titles=style==TabRailStyle.TITLES
     val wideSessions=sessions.takeIf {titles && TabWidthClass.of(windowWidthDp)==TabWidthClass.WIDE}
     val portrait=currentPaneOrientation()==PaneOrientation.PORTRAIT
@@ -182,8 +186,13 @@ private const val sidebarTransitionMillis=180
             }
         }
     }
-    Column(Modifier.fillMaxHeight().width(width).background(scheme.surface)
+    val glassVisible by remember(swipeBackdrop) {derivedStateOf {(swipeBackdrop?.reveal?.invoke() ?: 0f)>0f}}
+    val glass=if(glassVisible && hazeState!=null) Modifier.paneFrost(hazeState,RectangleShape,edge=false,opacity=.55f) else Modifier
+    Column(Modifier.zIndex(1f).fillMaxHeight().width(width)
+        .onSizeChanged {swipeBackdrop?.railWidth=it.width}.then(glass)
         .drawWithContent {
+            val opacity=1f-(swipeBackdrop?.reveal?.invoke() ?: 0f)
+            drawRect(scheme.surface.copy(alpha=opacity))
             drawContent()
             val stroke=.5.dp.toPx()
             val x=if(side==TabBarPosition.LEFT) size.width-stroke/2 else stroke/2

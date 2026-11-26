@@ -17,7 +17,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.offset
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -34,12 +36,17 @@ import kotlin.math.roundToInt
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
 
+internal class PaneSwipeBackdrop(val side: TabBarPosition) {
+    var railWidth by mutableIntStateOf(0)
+    var reveal by mutableStateOf<()->Float>({0f})
+}
+
 @Composable internal fun TerminalCarousel(blocks: List<BlockItem>,selectedBlock: String,liveBlock: String,
     liveScreen: TerminalScreen?,previewFrame: (String)->TerminalScreen?,programs: Map<String,ProgramIdentity>,controlled: Boolean,fontSize: Float,
     onInput: (String)->Unit,onScroll: (Int)->Unit,onWheel: (Int,Int,Int,Int,Int)->Unit,onActivate: (Boolean)->Unit,onBottom: ()->Unit,onDimensions: (Int,Int)->Unit,onSelect: (String)->Unit,onPanes: ()->Unit,
     onView: (TerminalView)->Unit,modifier: Modifier=Modifier,bindLiveView: ((String,TerminalView)->Boolean)?=null,
     onMouseClick: (Int,Int,Int,Int)->Unit={_,_,_,_->},mouseTarget: ()->String={""},onImage: (android.net.Uri,()->Unit)->Boolean={_,release->release();false},onPaste: ()->Boolean={false},imageTarget: ()->String=mouseTarget,bottomControlsInset: androidx.compose.ui.unit.Dp=0.dp,paneLayout: List<PanePlacement> = emptyList(),titles: Map<String,String> = emptyMap(),directories: Map<String,String> = emptyMap(),hazeState: HazeState?=null,captureBackdrop: Boolean=false,imeEnterSubmits: Boolean=false,keyboardChrome: ()->Int={0},squareCorners: Boolean=false,extendsUnderNavigation: Boolean=false,
-    navigationClearance: Dp=0.dp,bottomOverlayInset: Dp=0.dp,headerHeightSaved: ()->Int={0},headerOverlap: ()->Int={0},floatingMotion: FloatingPaneMotion?=null) {
+    navigationClearance: Dp=0.dp,bottomOverlayInset: Dp=0.dp,headerHeightSaved: ()->Int={0},headerOverlap: ()->Int={0},floatingMotion: FloatingPaneMotion?=null,swipeBackdrop: PaneSwipeBackdrop?=null) {
     val switchLayout=remember(paneLayout,blocks) {paneLayout.filter {p->blocks.any {it.id==p.id}}.sortedBy {it.layer}}
     val hasMinimap=blocks.all {b->switchLayout.any {it.id==b.id}}
     val localHaze=remember {HazeState()}
@@ -75,11 +82,19 @@ import dev.chrisbanes.haze.hazeSource
     LaunchedEffect(visualId,toast,dragging,settling) {
         if(toast && !dragging && !settling) {delay(1000);toast=false}
     }
-    BoxWithConstraints(modifier.clipToBounds()) {
+    BoxWithConstraints(if(swipeBackdrop==null) modifier.clipToBounds() else modifier) {
         val cardWidth=maxWidth.coerceAtLeast(80.dp)
         val cardLeft=0.dp
         val stride=with(LocalDensity.current){(cardWidth+8.dp).toPx()}
         val leftPx=with(LocalDensity.current){cardLeft.toPx()}
+        val revealDistance=with(LocalDensity.current) {24.dp.toPx()}
+        DisposableEffect(swipeBackdrop,stride,revealDistance) {
+            swipeBackdrop?.reveal={
+                val distance=abs(drag)
+                (minOf(distance,abs(stride-distance))/revealDistance).coerceIn(0f,1f)
+            }
+            onDispose {swipeBackdrop?.reveal={0f}}
+        }
         val candidate by remember(stride,blocks) {derivedStateOf {
             if(settling || toast) blocks.indexOfFirst {it.id==(settlingTarget ?: visualId)}.coerceAtLeast(0) else {
                 val current=blocks.indexOfFirst {it.id==visualId}.coerceAtLeast(0)
@@ -110,7 +125,25 @@ import dev.chrisbanes.haze.hazeSource
         val pages=offsets.map {offset->blocks[Math.floorMod(index+offset,blocks.size)] to offset}
         val retained=imeHandoff.retainFor(pages.map {it.first})
         val mountedPages=pages+listOfNotNull(retained?.let {it.pane to 4})
-        Box(Modifier.fillMaxSize().then(if(showSwitch || captureBackdrop) Modifier.hazeSource(haze) else Modifier)) {
+        val motion=dragging || settling
+        val railExtension=if(motion && swipeBackdrop!=null) Modifier.layout {measurable,constraints->
+            // Give the haze source room behind the rail and report the original viewport width.
+            val inset=swipeBackdrop.railWidth
+            val backdrop=measurable.measure(constraints.offset(horizontal=inset))
+            layout(constraints.maxWidth,backdrop.height) {
+                backdrop.placeRelative(if(swipeBackdrop.side==TabBarPosition.LEFT) -inset else 0,0)
+            }
+        } else Modifier
+        val pageInset=if(motion && swipeBackdrop!=null) Modifier.layout {measurable,constraints->
+            val inset=swipeBackdrop.railWidth
+            val page=measurable.measure(constraints.offset(horizontal=-inset))
+            layout(page.width+inset,page.height) {
+                page.placeRelative(if(swipeBackdrop.side==TabBarPosition.LEFT) inset else 0,0)
+            }
+        } else Modifier
+        Box(Modifier.fillMaxSize().then(railExtension)
+            .then(if(showSwitch || captureBackdrop || (motion && swipeBackdrop!=null)) Modifier.hazeSource(haze) else Modifier)
+            .clipToBounds().then(pageInset)) {
         for((block,offset) in mountedPages) {
             val retiring=retained?.pane?.id==block.id
             val center=offset==0 && !retiring

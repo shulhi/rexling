@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clipToBounds
+import dev.chrisbanes.haze.HazeState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -54,6 +56,48 @@ class PaneChromeTest {
         }
         ui.mainClock.autoAdvance=false
     }
+    @Test fun swipingDrawsBehindLeftSidebar() = swipeBehindSidebar(TabBarPosition.LEFT)
+    @Test fun swipingDrawsBehindRightSidebar() = swipeBehindSidebar(TabBarPosition.RIGHT)
+
+    private fun swipeBehindSidebar(side: TabBarPosition) {
+        val blocks=listOf(BlockItem("a","shell"),BlockItem("b","shell"))
+        val screen=TerminalScreen(20,10,null,null,-1,0,emptyList())
+        ui.setContent {
+            MaterialTheme {
+                val backdrop=remember {PaneSwipeBackdrop(side)}
+                val haze=remember {HazeState()}
+                val rail: @Composable ()->Unit={
+                    TerminalTabRail(emptyList(),"",true,{},{emptyList()},{0},side,TabRailStyle.ICONS,
+                        swipeBackdrop=backdrop,hazeState=haze) {}
+                }
+                Row(Modifier.size(300.dp,400.dp).clipToBounds().testTag("swipe workspace")) {
+                    if(side==TabBarPosition.LEFT) rail()
+                    TerminalCarousel(blocks,"a","a",screen,{screen},emptyMap(),false,10f,
+                        {},{},{_,_,_,_,_->},{},{},{_,_->},{},{},{terminal=it},
+                        Modifier.weight(1f),squareCorners=true,hazeState=haze,swipeBackdrop=backdrop)
+                    if(side==TabBarPosition.RIGHT) rail()
+                }
+            }
+        }
+        val workspace=ui.onNodeWithTag("swipe workspace")
+        fun railPixel(): androidx.compose.ui.graphics.Color {
+            val pixels=workspace.captureToImage().toPixelMap()
+            val x=if(side==TabBarPosition.LEFT) pixels.width/12 else pixels.width-pixels.width/12
+            return pixels[x,pixels.height/4]
+        }
+        val resting=railPixel()
+        val width=ui.runOnIdle {terminal.width}
+        val dx=width*.45f*if(side==TabBarPosition.LEFT) -1 else 1
+        ui.runOnIdle {terminal.onPaneDrag?.invoke(dx,true)}
+        val moving=railPixel()
+        assertTrue("The rail should show the dark terminal behind its surface",resting.red-moving.red>.1f)
+        ui.runOnIdle {
+            assertEquals(width,terminal.width)
+            terminal.onPaneDrag?.invoke(0f,false)
+        }
+        assertEquals(resting,railPixel())
+    }
+
     private fun badge()=ui.onNodeWithContentDescription("Pane switch indicator")
     @Test fun badgeNeverDisappearsOrChangesPaneAcrossTheAnimationHandoff() {
         carousel()
