@@ -15,8 +15,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -128,7 +126,6 @@ private const val sidebarTransitionMillis=180
     // that motion directly, without adding a second placement spring.
     val tabsFollowSwitcher=portrait && (switcherTransition.isRunning ||
         switcherTransition.currentState!=switcherTransition.targetState)
-    // Swipe across the rail toward the terminal to show titles, back toward the screen edge to hide them.
     // Resizes are debounced, so the animated width sends the pane only its final size.
     val width by androidx.compose.animation.core.animateDpAsState(tabRailWidth(style,windowWidthDp),
         tween(sidebarTransitionMillis),label="Tab rail width")
@@ -142,14 +139,6 @@ private const val sidebarTransitionMillis=180
             ((space-size)*tabAlignment.value).roundToInt()
         })
     }
-    val outward=if(side==TabBarPosition.LEFT) 1f else -1f
-    val threshold=with(androidx.compose.ui.platform.LocalDensity.current) {32.dp.toPx()}
-    var swipe by remember {mutableFloatStateOf(0f)}
-    // Gesture navigation treats edge swipes as Back. Android lets an app opt out for at most 200dp of
-    // each edge, so claim the rail's lowest 200dp (its buttons and nearest tabs); the toggle below
-    // always works.
-    val exclusion=with(androidx.compose.ui.platform.LocalDensity.current) {200.dp.toPx()}
-    val haptic=androidx.compose.ui.platform.LocalHapticFeedback.current
     val scheme=MaterialTheme.colorScheme
     val divider=scheme.outlineVariant.copy(alpha=.65f)
     val list=rememberLazyListState()
@@ -200,22 +189,6 @@ private const val sidebarTransitionMillis=180
         }
         // Reaches the screen edge under the gesture handle; its buttons stay above it.
         .then(if(extendUnderNav) Modifier.windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)) else Modifier)
-        .systemGestureExclusion {coordinates->
-            val height=coordinates.size.height.toFloat()
-            androidx.compose.ui.geometry.Rect(0f,(height-exclusion).coerceAtLeast(0f),coordinates.size.width.toFloat(),height)
-        }
-        .draggable(androidx.compose.foundation.gestures.rememberDraggableState {swipe+=it},androidx.compose.foundation.gestures.Orientation.Horizontal,
-            onDragStarted={swipe=0f},onDragStopped={
-                val next=when {
-                    swipe*outward>threshold -> TabRailStyle.TITLES
-                    swipe*outward< -threshold -> TabRailStyle.ICONS
-                    else -> style
-                }
-                swipe=0f
-                if(next!=style) {haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress);onStyle(next)}
-            })
-        .semantics {customActions=listOf(CustomAccessibilityAction(if(titles) "Show icons only" else "Show tab titles") {
-            onStyle(if(titles) TabRailStyle.ICONS else TabRailStyle.TITLES);true})}
         .then(if(wideSessions!=null) Modifier.layout {measurable,constraints->
             // Keep the expanded sidebar's scrollable lists below the compact header.
             val inset=headerOverlap().coerceIn(0,constraints.maxHeight)

@@ -347,6 +347,8 @@ class PaneChromeTest {
             return icon.left-row.left
         }
         check(172.dp,"titles")
+        ui.onNodeWithContentDescription("Tabs").performTouchInput {swipeLeft()}
+        ui.onNodeWithContentDescription("Show icons only").assertIsDisplayed()
         val expandedIconInset=tabIconInset()
         val collapse=ui.onNodeWithContentDescription("Show icons only")
         val expandedToggle=collapse.fetchSemanticsNode().boundsInRoot
