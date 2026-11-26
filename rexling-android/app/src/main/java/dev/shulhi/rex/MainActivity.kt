@@ -590,6 +590,13 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
         }
     }
     if(menu) {
+        val showProgramResume=ready && chosenBlock!=null && chosen==liveBlock && state.supportsProgramResume
+        if(showProgramResume) {
+            DisposableEffect(client,state.selectedSession,liveBlock,state.connectionEpoch,state.navigationId) {
+                client.watchProgramResume(state,true)
+                onDispose {client.watchProgramResume(state,false)}
+            }
+        }
         val canTakeControl=ready && client.hasScreen
         val canAttach=controlled && model.images.state==null
         TerminalActionsDrawer(
@@ -627,6 +634,8 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
                 TerminalDrawerAction("Servers · ${model.connectedCount} connected",ChromeIcon.SERVER,opensDrawer=true) {servers=true},
                 TerminalDrawerAction("Refresh sessions",ChromeIcon.REFRESH,enabled=state.connected) {client.refresh()},
             ),
+            showProgramResume=showProgramResume,
+            programResume=state.programResume,
             onPreferences={preferencesOpen=true},
             onClosePane=chosenBlock?.takeIf {ready}?.let {block-> {closeTarget=closePaneTarget(block)} },
             onDismiss={menu=false},

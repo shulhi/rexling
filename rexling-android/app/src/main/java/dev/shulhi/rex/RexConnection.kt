@@ -524,6 +524,12 @@ internal class RexConnection(application: Application, private val scope: Corout
             command("close_tab","session" to session,"id" to id,"blocks" to org.json.JSONArray(blocks))
         }
     }
+    internal fun watchProgramResume(target: AppState, watch: Boolean) {
+        command("program_resume", "watch" to watch, "session" to target.selectedSession,
+            "block" to target.selectedBlock, "connectionEpoch" to target.connectionEpoch,
+            "navigationId" to target.navigationId)
+    }
+
     internal fun undoClose(serial: Long) {
         val current=state.value
         if(!visible || !foreground || !current.connected || current.creating || navigationRequest.pending ||

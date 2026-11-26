@@ -1,7 +1,7 @@
 //! One actor owns every connection and the !Send Ghostty replica.
 use anyhow::{Context, Result, ensure};
 use rex_core::{
-    control::{Control, Trace, UNDO_CLOSE_API_REVISION},
+    control::{Control, PROGRAM_RESUME_API_REVISION, Trace, UNDO_CLOSE_API_REVISION},
     data::{Data, Resume},
     ghostty::{Frame, Replica, Terminal},
     transport::Endpoint,
@@ -321,6 +321,43 @@ struct RetainedFloating {
     data: Data,
     replica: Replica,
 }
+struct ProgramResumeWatch {
+    target: Target,
+    initial: Option<ProgramTask>,
+    status: Value,
+}
+
+fn program_resume_status(payload: &Value) -> Value {
+    let Some(records) = payload["records"].as_array() else {
+        return json!({"state":"unavailable"});
+    };
+    let record = records.iter().find(|record| record["chosen"] == true && record["trusted"] == true)
+        .or_else(|| records.iter().find(|record| record["chosen"] == true))
+        .or_else(|| records.first());
+    let Some(record) = record else { return json!({"state":"none"}); };
+    let ready = record["chosen"] == true && record["trusted"] == true;
+    let state = if ready { "ready" } else if record["trusted"] == true { "notSelected" } else { "blocked" };
+    let program: String = record["program"].as_str().unwrap_or("").chars()
+        .filter(|c| !c.is_control()).take(80).collect();
+    // Resume commands may contain secrets. Keep only the status fields needed by the drawer.
+    let reason = record["untrusted_reason"].as_str().filter(|reason| matches!(*reason,
+        "no_rule" | "dir_not_allowed" | "flag_not_listed" | "flag_value" | "flags_differ" |
+        "program_differs" | "wrapped" | "launch_unreadable" | "config_incomplete"));
+    json!({"state":state,"program":program,"reason":reason})
+}
+
+#[cfg(test)]
+#[test]
+fn resume_status_requires_a_trusted_chosen_record_and_drops_command() {
+    let ready = json!({"chosen":true,"trusted":true,"program":"claude","command":["claude","--resume","secret"]});
+    let blocked = json!({"chosen":true,"program":"codex","untrusted_reason":"flag_not_listed"});
+    assert_eq!(program_resume_status(&json!({"records":[blocked, ready]})),
+        json!({"state":"ready","program":"claude","reason":null}));
+    assert_eq!(program_resume_status(&json!({"records":[blocked]})),
+        json!({"state":"blocked","program":"codex","reason":"flag_not_listed"}));
+    assert_eq!(program_resume_status(&json!({"records":[]})), json!({"state":"none"}));
+}
+
 const UNDO_CLOSE_WINDOW: Duration = Duration::from_secs(55);
 
 struct UndoClose {
@@ -360,6 +397,7 @@ struct Actor {
     error: String,
     notice: String,
     supports_undo_close: bool,
+    program_resume: Option<ProgramResumeWatch>,
     undo_close_serial: u64,
     undo_close: Option<UndoClose>,
     progress_reports: BTreeMap<String,Value>,
@@ -440,6 +478,7 @@ impl Actor {
             error: String::new(),
             notice: String::new(),
             supports_undo_close: false,
+            program_resume: None,
             undo_close_serial: 0,
             undo_close: None,
             progress_reports:BTreeMap::new(),
@@ -481,6 +520,11 @@ impl Actor {
             session_details: json!({}),
         }
     }
+    fn supports_program_resume(&self) -> bool {
+        self.phase == "connected" && self.control.as_ref().is_some_and(|control|
+            control.welcome()["api_revision"].as_u64().is_some_and(|revision| revision >= PROGRAM_RESUME_API_REVISION))
+    }
+
     fn publish(&mut self) {
         self.mirror_waiting = self.mirror.waiting().map(str::to_owned).collect();
         if self.activity_dirty {
@@ -492,6 +536,8 @@ impl Actor {
             }
             self.activity_snapshot=Arc::new(items);self.activity_dirty=false;
         }
+        let resume = self.program_resume.as_ref().filter(|watch| watch.target == self.input_target());
+        let supports_program_resume = self.supports_program_resume();
         if let Ok(mut shared) = self.shared.lock() {
             shared.activity=self.activity_snapshot.clone();
             shared.revision += 1;
@@ -501,7 +547,7 @@ impl Actor {
                 "terminalProgress":crate::progress::selected(&self.progress_reports,&self.selected_session),"identity":self.identity,"error":self.error,"notice":self.notice,"clipboard":self.clipboard,"sessions":self.sessions,
                 "mirrorWaiting":self.mirror_waiting,"windows":self.windows,"selectedSession":self.selected_session,"staleSession":self.stale_session,
                 "awaitingPaneSelection":self.awaiting_pane_selection,
-                "serverVersion":self.server_version,
+                "serverVersion":self.server_version, "supportsProgramResume":supports_program_resume, "programResume":resume.map(|watch|&watch.status),
                 "supportsUndoClose":self.phase=="connected" && self.supports_undo_close,
                 "undoClose":self.undo_close.as_ref().map(|close|json!({"serial":close.serial,"tab":close.tab})),
                 "selectedBlock":self.selected_block,"navigationId":self.navigation_id,"tabMoveId":self.tab_move_id,"paneMoveId":self.pane_move_id,"connectionEpoch":self.connection_epoch,"otherOwner":self.other_owner,"controlled":self.controlled,"creating":self.creating,"sessionDetails":self.session_details,"paneCatalog":self.pane_catalog,"paneCatalogLoading":self.pane_catalog_task.is_some(),"programs":self.programs,"directories":self.directories,"titles":self.titles,"working":self.working,"activityError":self.activity_error,"activityPartial":self.activity_partial,"activityLoading":(self.activity_open || self.monitoring) && (self.activity_task.is_some() || self.activity_full),"attentionCount":self.attention_count}).to_string();
@@ -609,6 +655,18 @@ impl Actor {
                         && !version.trim().is_empty() {
                         self.server_version = version.trim().chars().filter(|c| !c.is_control()).take(100).collect();
                         self.publish();
+                    }
+                },
+                result=async {match self.program_resume.as_mut().and_then(|watch| watch.initial.as_mut()) {
+                    Some(task)=>task.await,None=>pending().await
+                }}=>{
+                    let target = self.input_target();
+                    if let Some(watch) = self.program_resume.as_mut() {
+                        watch.initial = None;
+                        if watch.target == target && watch.status.is_null() {
+                            watch.status = program_resume_status(&result.unwrap_or(Value::Null));
+                            self.publish();
+                        }
                     }
                 },
                 result=async {match &mut self.connect_task {Some(task)=>task.await,None=>pending().await}}=>{
@@ -784,6 +842,7 @@ impl Actor {
         }
     }
     async fn disconnect(&mut self) {
+        self.program_resume = None;
         self.server_version.clear();
         self.server_version_reply = None;
         self.undo_close = None;
@@ -817,6 +876,7 @@ impl Actor {
         self.owned_blocks.clear();
     }
     fn lose_connections(&mut self) {
+        self.program_resume = None;
         self.server_version.clear();
         self.server_version_reply = None;
         self.undo_close = None;
@@ -1174,6 +1234,18 @@ impl Actor {
             if inner["type"]=="block_event" {
                 let block=&inner["payload"];let sid=event["payload"]["session_id"].as_str().unwrap_or("");
                 if block["creator_name"]=="com.superlogical.terminal" && let (Some(id),Some(name))=(block["block_id"].as_str(),block["name"].as_str()) {
+                    if name=="program_resume_changed" {
+                        let target = self.input_target();
+                        if let Some(watch) = self.program_resume.as_mut()
+                            && watch.target == target && target.session == sid && target.block == id {
+                            let status = program_resume_status(&block["payload"]);
+                            if status != watch.status {
+                                watch.status = status;
+                                self.publish();
+                            }
+                        }
+                        return Ok(());
+                    }
                     if name=="progress_report" {
                         if crate::progress::update(&mut self.progress_reports,sid,id,&block["payload"]) {self.activity_dirty=true;self.publish();}
                         return Ok(());
@@ -1359,6 +1431,23 @@ impl Actor {
         let kind=value["type"].as_str().context("command type missing")?;
         ensure!(!self.monitoring || matches!(kind,"monitor"|"connect"|"disconnect"|"network"|"retry"|"activity_seen"),"Background monitor is read-only");
         match kind {
+            "program_resume" => {
+                let target = self.input_target();
+                if value["watch"] == true {
+                    if !target.matches(&value) || !self.supports_program_resume() || target.block.is_empty() {return Ok(());}
+                    let control = self.control.as_mut().expect("connected control");
+                    let reply = control.start_call("com.superlogical.terminal.program_resume_records",
+                        json!({"session_id":target.session,"block_id":target.block,"args":{}})).await;
+                    let (initial, status) = match reply {
+                        Ok(reply) => (Some(Box::pin(reply.receive()) as ProgramTask), Value::Null),
+                        Err(_) => (None, json!({"state":"unavailable"})),
+                    };
+                    self.program_resume = Some(ProgramResumeWatch {target, initial, status});
+                } else if self.program_resume.as_ref().is_some_and(|watch|watch.target.matches(&value)) {
+                    self.program_resume = None;
+                }
+                self.publish();
+            }
             "monitor" => {
                 // Irreversible for this handle. Must be enabled before connecting or selecting a pane.
                 ensure!(self.endpoint.is_none() && self.selected_session.is_empty() && self.data.is_none(),"Enable monitoring before connecting");

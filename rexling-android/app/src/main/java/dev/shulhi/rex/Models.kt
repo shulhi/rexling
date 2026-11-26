@@ -43,6 +43,8 @@ data class TerminalScreen(val columns: Int, val rows: Int, val cursorX: Int?, va
     }
 }
 data class TerminalClipboardWrite(val serial: Long,val text: String,val block: String,val connection: Long,val navigation: Long,val local: Boolean=false)
+data class ProgramResumeStatus(val state: String,val program: String,val reason: String)
+
 data class UndoTerminalClose(val serial: Long,val tab: Boolean)
 
 data class AppState(
@@ -59,6 +61,7 @@ data class AppState(
     val revision: Long = 0, val phase: String = "disconnected", val endpoint: String = "",
     internal val clipboardWrite: TerminalClipboardWrite?=null,
     val identity: String = "", val serverVersion: String = "", val error: String = "", val notice: String = "",
+    val supportsProgramResume: Boolean=false,val programResume: ProgramResumeStatus?=null,
     val supportsUndoClose: Boolean=false,val undoClose: UndoTerminalClose?=null,
     val sessions: List<SessionItem> = emptyList(), val windows: List<WindowItem> = emptyList(),
     val selectedSession: String = "", val selectedBlock: String = "", val controlled: Boolean = false,
@@ -96,6 +99,10 @@ data class AppState(
                 endpoint = root.optString("endpoint"), identity = root.optString("identity"),
                 serverVersion=root.optString("serverVersion"),
                 error = root.optString("error"), notice = root.optString("notice"),
+                supportsProgramResume=root.optBoolean("supportsProgramResume"),
+                programResume=root.optJSONObject("programResume")?.let {
+                    ProgramResumeStatus(it.optString("state"),it.optString("program"),it.optString("reason"))
+                },
                 supportsUndoClose=root.optBoolean("supportsUndoClose"),
                 undoClose=root.optJSONObject("undoClose")?.let {UndoTerminalClose(it.getLong("serial"),it.optBoolean("tab"))},
                 sessions = root.optJSONArray("sessions").objects { value ->

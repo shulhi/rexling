@@ -48,6 +48,8 @@ internal data class TerminalDrawerAction(
     onClosePane: (() -> Unit)?,
     onDismiss: () -> Unit,
     hazeState: HazeState? = null,
+    showProgramResume: Boolean = false,
+    programResume: ProgramResumeStatus? = null,
 ) {
     fun dispatch(action: () -> Unit) {
         onDismiss()
@@ -100,6 +102,10 @@ internal data class TerminalDrawerAction(
             }
             SettingsCard {
                 Column(Modifier.fillMaxWidth()) {
+                    if (showProgramResume) {
+                        ProgramResumeRow(programResume)
+                        if (actions.isNotEmpty()) SettingsDivider()
+                    }
                     actions.forEachIndexed { index, action ->
                         if (index > 0) SettingsDivider()
                         TerminalDrawerRow(action) { dispatch(action.run) }
@@ -113,6 +119,43 @@ internal data class TerminalDrawerAction(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable private fun ProgramResumeRow(status: ProgramResumeStatus?) {
+    val colors = MaterialTheme.colorScheme
+    val text = when (status?.state) {
+        "ready" -> "Ready to resume"
+        "blocked" -> "Can’t resume"
+        "none" -> "No resume record"
+        "notSelected" -> "No program selected to resume"
+        "unavailable" -> "Status unavailable"
+        else -> "Checking…"
+    }
+    val reason = if (status?.state == "blocked") when (status.reason) {
+        "no_rule" -> "No matching resume rule"
+        "dir_not_allowed" -> "Working directory is outside the rule"
+        "flag_not_listed" -> "A launch flag is outside the rule"
+        "flag_value", "flags_differ" -> "Launch flags don’t match the rule"
+        "program_differs" -> "The resume command names a different program"
+        "wrapped" -> "The program runs inside a wrapper"
+        "launch_unreadable" -> "Rex couldn’t read the launch arguments"
+        "config_incomplete" -> "Rex couldn’t load its configuration"
+        else -> "Rex didn’t trust the resume command"
+    } else null
+    val detail = listOfNotNull(status?.program?.takeIf { it.isNotBlank() }, text, reason).joinToString(" · ")
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        val ready = status?.state == "ready"
+        ChromeSymbol(if (ready) ChromeIcon.CHECK else ChromeIcon.REFRESH, Modifier.size(20.dp),
+            if (ready) colors.primary else colors.onSurfaceVariant)
+        Column(Modifier.weight(1f)) {
+            Text("Program resume", style = SettingsType.row)
+            Text(detail, style = SettingsType.detail, color = colors.onSurfaceVariant)
         }
     }
 }
