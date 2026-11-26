@@ -1,7 +1,7 @@
 //! One actor owns every connection and the !Send Ghostty replica.
 use anyhow::{Context, Result, ensure};
 use rex_core::{
-    control::{Control, Trace},
+    control::{Control, Trace, UNDO_CLOSE_API_REVISION},
     data::{Data, Resume},
     ghostty::{Frame, Replica, Terminal},
     transport::Endpoint,
@@ -321,6 +321,14 @@ struct RetainedFloating {
     data: Data,
     replica: Replica,
 }
+const UNDO_CLOSE_WINDOW: Duration = Duration::from_secs(55);
+
+struct UndoClose {
+    serial: u64,
+    tab: bool,
+    expires: tokio::time::Instant,
+}
+
 struct Actor {
     latest_navigation: Arc<AtomicU64>,
     shared: Arc<Mutex<Shared>>,
@@ -351,6 +359,9 @@ struct Actor {
     server_version_reply: Option<ProgramTask>,
     error: String,
     notice: String,
+    supports_undo_close: bool,
+    undo_close_serial: u64,
+    undo_close: Option<UndoClose>,
     progress_reports: BTreeMap<String,Value>,
     clipboard_serial: u64,
     clipboard: Value,
@@ -428,6 +439,9 @@ impl Actor {
             server_version_reply: None,
             error: String::new(),
             notice: String::new(),
+            supports_undo_close: false,
+            undo_close_serial: 0,
+            undo_close: None,
             progress_reports:BTreeMap::new(),
             clipboard_serial: 0,clipboard: Value::Null,
             sessions: json!([]),
@@ -488,6 +502,8 @@ impl Actor {
                 "mirrorWaiting":self.mirror_waiting,"windows":self.windows,"selectedSession":self.selected_session,"staleSession":self.stale_session,
                 "awaitingPaneSelection":self.awaiting_pane_selection,
                 "serverVersion":self.server_version,
+                "supportsUndoClose":self.phase=="connected" && self.supports_undo_close,
+                "undoClose":self.undo_close.as_ref().map(|close|json!({"serial":close.serial,"tab":close.tab})),
                 "selectedBlock":self.selected_block,"navigationId":self.navigation_id,"tabMoveId":self.tab_move_id,"paneMoveId":self.pane_move_id,"connectionEpoch":self.connection_epoch,"otherOwner":self.other_owner,"controlled":self.controlled,"creating":self.creating,"sessionDetails":self.session_details,"paneCatalog":self.pane_catalog,"paneCatalogLoading":self.pane_catalog_task.is_some(),"programs":self.programs,"directories":self.directories,"titles":self.titles,"working":self.working,"activityError":self.activity_error,"activityPartial":self.activity_partial,"activityLoading":(self.activity_open || self.monitoring) && (self.activity_task.is_some() || self.activity_full),"attentionCount":self.attention_count}).to_string();
             shared
                 .pending_previews
@@ -542,7 +558,12 @@ impl Actor {
             }
             let mirror_due = self.mirror.due().filter(|_| self.visible);
             let mirror_retry = self.mirror.retry_due().filter(|_| self.visible && active && self.control.is_some());
+            let undo_expires = self.undo_close.as_ref().map(|close| close.expires);
             tokio::select! {
+                _ = async { if let Some(expires) = undo_expires { tokio::time::sleep_until(expires).await; } else { pending::<()>().await; } } => {
+                    self.undo_close = None;
+                    self.publish();
+                },
                 value=rx.recv()=>{
                     let Some(value)=value else{break;};
                     if value["type"]=="shutdown"{break;}
@@ -707,7 +728,11 @@ impl Actor {
                         self.retry=None;
                         if let Some(endpoint)=self.endpoint.clone() {
                             let token=self.control_token.clone();
-                            self.connect_task=Some(Box::pin(async move {Control::connect(endpoint,token.as_deref(),Trace::default()).await}));
+                            let monitoring=self.monitoring;
+                            self.connect_task=Some(Box::pin(async move {
+                                if monitoring {Control::connect(endpoint,token.as_deref(),Trace::default()).await}
+                                else {Control::connect_workspace(endpoint,token.as_deref()).await}
+                            }));
                         }
                     }
                     if self.phase=="connected" && self.activity_task.is_none() && self.activity_refresh<=now && (self.activity_full || !self.activity_pending.is_empty()) {
@@ -761,6 +786,7 @@ impl Actor {
     async fn disconnect(&mut self) {
         self.server_version.clear();
         self.server_version_reply = None;
+        self.undo_close = None;
         let _ = tokio::time::timeout(Duration::from_secs(2), self.release_session_panes()).await;
         self.close_retained_floating().await;
         self.awaiting_pane_selection = false;
@@ -793,6 +819,7 @@ impl Actor {
     fn lose_connections(&mut self) {
         self.server_version.clear();
         self.server_version_reply = None;
+        self.undo_close = None;
         self.owned_blocks.clear();
         self.retained_floating=None;
         self.mirror.clear();
@@ -826,6 +853,7 @@ impl Actor {
         self.publish();
     }
     fn clear_ended_session(&mut self, session: String) {
+        if self.selected_session == session { self.undo_close = None; }
         self.owned_blocks.clear();
         self.stale_session = session;
         self.selected_session.clear();
@@ -875,7 +903,9 @@ impl Actor {
 
     async fn connected(&mut self,mut control: Control) -> Result<()> {
         let endpoint=self.endpoint.clone().context("server missing")?;
-        let resumed = control.welcome()["client"]["resumed"] == true;
+        let welcome = control.welcome();
+        let resumed = welcome["client"]["resumed"] == true;
+        self.supports_undo_close = welcome["api_revision"].as_u64().is_some_and(|revision| revision >= UNDO_CLOSE_API_REVISION);
         self.control_token = control.token().map(str::to_owned);
         self.sessions = control
             .call("session.attach_all", json!({"event_scope":"all"}))
@@ -1536,6 +1566,7 @@ impl Actor {
                         .await;
                 }
                 let attached = self.control.as_mut().unwrap().attach(&id).await?;
+                self.undo_close = None;
                 self.selected_session = id;
                 self.selected_block.clear();
                 self.awaiting_pane_selection = false;
@@ -1609,6 +1640,7 @@ impl Actor {
                     .context("session ID required")?
                     .to_owned();
                 if self.selected_session != session {
+                    self.undo_close = None;
                     self.preview_task = None;
                     self.summary_task = None;
                     self.program_task = None;
@@ -1678,10 +1710,19 @@ impl Actor {
                         let actual: Vec<_>=window["blocks"].as_array().into_iter().flatten().map(|b|b["id"].clone()).collect();
                         ensure!(value["blocks"].as_array()==Some(&actual),"This tab changed while you were confirming. Review it before closing");
                     }
-                    let (method,args)=if tab {("session.close_window",json!({"session_id":self.selected_session,"window_id":id}))}
+                    let (method,mut args)=if tab {("session.close_window",json!({"session_id":self.selected_session,"window_id":id}))}
                         else {("block.close",json!({"session_id":self.selected_session,"block_id":id}))};
-                    if let Err(error)=self.control.as_mut().context("not connected")?.call(method,args).await
-                        && !missing_terminal(&error) {return Err(error);}
+                    let expires=tokio::time::Instant::now()+UNDO_CLOSE_WINDOW;
+                    if self.supports_undo_close {args["undoable"]=json!(true);}
+                    match self.control.as_mut().context("not connected")?.call(method,args).await {
+                        Ok(_) if self.supports_undo_close => {
+                            self.undo_close_serial+=1;
+                            self.undo_close=Some(UndoClose {serial:self.undo_close_serial,tab,expires});
+                        }
+                        Ok(_) => {}
+                        Err(error) if missing_terminal(&error) => {}
+                        Err(error) => return Err(error),
+                    }
                 }
                 if self.refresh_close_view().await? && self.selected_block.is_empty() {
                     let windows=self.windows.as_array().context("invalid window list")?;
@@ -1690,6 +1731,33 @@ impl Actor {
                     if let Some(block)=fallback {self.open_block(block).await?;}
                 }
                 self.creating=false;self.notice=if tab {"Tab closed"} else {"Pane closed"}.into();self.publish();
+            }
+            "undo_close" => {
+                if !self.visible || self.phase!="connected" || self.paused || self.creating
+                    || value["session"]!=self.selected_session
+                    || value["connectionEpoch"].as_u64()!=Some(self.connection_epoch)
+                    || value["navigationId"].as_u64()!=Some(self.navigation_id)
+                    || self.navigation_id<self.latest_navigation.load(Ordering::Acquire)
+                    || !self.undo_close.as_ref().is_some_and(|close|
+                        value["serial"].as_u64()==Some(close.serial) && tokio::time::Instant::now()<close.expires) {
+                    return Ok(());
+                }
+                self.undo_close=None;
+                self.creating=true;self.error.clear();self.publish();
+                let result=self.control.as_mut().context("not connected")?.call("client.undo_close",json!({})).await;
+                if let Err(error)=&result
+                    && error.downcast_ref::<rex_core::control::RpcError>().is_some_and(|rpc|rpc.code=="not_found") {
+                    anyhow::bail!("This close can no longer be undone.");
+                }
+                let restored=result?;
+                if restored["session_id"]==self.selected_session
+                    && self.navigation_id>=self.latest_navigation.load(Ordering::Acquire)
+                    && self.refresh_close_view().await? {
+                    if let Some(block)=restored["block_id"].as_str() {
+                        self.open_block(block.to_owned()).await?;
+                    }
+                }
+                self.creating=false;self.publish();
             }
             "new_tab" | "new_pane" => {
                 ensure!(
@@ -3553,6 +3621,63 @@ mod tests {
         let list=runtime.block_on(writer.call("session.list",json!({}))).unwrap();
         if list["sessions"].as_array().unwrap().iter().any(|s|s["session_id"]==id) {runtime.block_on(writer.call("session.destroy",json!({"session_id":id}))).unwrap();}
         runtime.block_on(writer.close()).unwrap();result.unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires an explicitly supplied Rex server with Undo Close support"]
+    fn live_undo_close_restores_pane_and_last_tab_with_terminal_history() {
+        let endpoint=std::env::var("REX_TEST_SERVER").expect("set REX_TEST_SERVER");
+        let runtime=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let mut writer=runtime.block_on(Control::connect(Endpoint::new(&endpoint,Duration::from_secs(10)).unwrap(),None,Trace::default())).unwrap();
+        let layout=json!({"block":{"flavor":"com.superlogical.terminal.shell","options":{"shell":"none",
+            "command":["/bin/sh","-c","stty -echo; seq 10100 10220; exec cat"]}}});
+        let created=runtime.block_on(writer.call("session.create",json!({"label":"rexling-undo-close-test",
+            "initial_windows":[{"layout":{"split":{"direction":"horizontal","before":layout,"after":layout}}}]}))).unwrap();
+        let id=&created["session_id"];
+        let tab=&created["initial_windows"][0]["window_id"];
+        let blocks=&created["initial_windows"][0]["block_ids"];
+        let block=&blocks[0];
+        let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let app=Session::spawn().unwrap();
+            app.command(json!({"type":"connect","server":endpoint})).unwrap();
+            wait(&app,|v|v["phase"]=="connected" && v["supportsUndoClose"]==true);
+            app.command(json!({"type":"session","id":id,"block":block,"navigationId":1})).unwrap();
+            wait(&app,|v|text(v).contains("10220"));
+            app.command(json!({"type":"take"})).unwrap();
+            wait(&app,|v|v["controlled"]==true);
+            app.command(json!({"type":"input","text":"PRESERVED_BEFORE_CLOSE\n"})).unwrap();
+            wait(&app,|v|text(v).contains("PRESERVED_BEFORE_CLOSE"));
+            let undo_command=|state:&Value|json!({"type":"undo_close","serial":state["undoClose"]["serial"],
+                "session":id,"connectionEpoch":state["connectionEpoch"],"navigationId":state["navigationId"]});
+
+            app.command(json!({"type":"close_pane","session":id,"id":block})).unwrap();
+            let closed=wait(&app,|v|v["undoClose"]["tab"]==false && v["creating"]==false);
+            assert_eq!(closed["selectedBlock"],blocks[1]);
+            let undo=undo_command(&closed);
+            let mut stale=undo.clone();stale["serial"]=json!(0);
+            app.command(stale).unwrap();
+            app.command(undo).unwrap();
+            let restored=wait(&app,|v|v["selectedBlock"]==*block && text(v).contains("PRESERVED_BEFORE_CLOSE"));
+            assert_eq!(restored["windows"][0]["id"],*tab);
+            assert!(restored["undoClose"].is_null());
+
+            app.command(json!({"type":"close_tab","session":id,"id":tab,"blocks":blocks})).unwrap();
+            let closed=wait(&app,|v|v["undoClose"]["tab"]==true && v["creating"]==false);
+            assert_eq!(closed["windows"],json!([]));
+            app.command(undo_command(&closed)).unwrap();
+            let restored=wait(&app,|v|v["selectedBlock"]==*block && text(v).contains("PRESERVED_BEFORE_CLOSE"));
+            assert_eq!(restored["windows"][0]["id"],*tab);
+            app.command(json!({"type":"scroll","block":block,"lines":-10000})).unwrap();
+            wait(&app,|v|text(v).contains("10100"));
+            app.command(json!({"type":"take"})).unwrap();
+            wait(&app,|v|v["controlled"]==true);
+            app.command(json!({"type":"input","text":"STILL_RUNNING\n"})).unwrap();
+            wait(&app,|v|text(v).contains("STILL_RUNNING"));
+        }));
+        runtime.block_on(writer.attach(id.as_str().unwrap())).unwrap();
+        runtime.block_on(writer.call("session.destroy",json!({"session_id":id}))).unwrap();
+        runtime.block_on(writer.close()).unwrap();
+        result.unwrap();
     }
 
     #[test]

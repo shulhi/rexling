@@ -524,6 +524,15 @@ internal class RexConnection(application: Application, private val scope: Corout
             command("close_tab","session" to session,"id" to id,"blocks" to org.json.JSONArray(blocks))
         }
     }
+    internal fun undoClose(serial: Long) {
+        val current=state.value
+        if(!visible || !foreground || !current.connected || current.creating || navigationRequest.pending ||
+            current.undoClose?.serial!=serial) return
+        activation.navigate();resizeJob?.cancel();cancelKeyRepeats()
+        controlModifier=false;altModifier=false;shiftState=ShiftKeyState();keyboardRequest=""
+        command("undo_close","serial" to serial,"session" to current.selectedSession,
+            "connectionEpoch" to current.connectionEpoch,"navigationId" to current.navigationId)
+    }
     fun refresh() = command("refresh")
     fun claimActivePane() {
         val current=state.value

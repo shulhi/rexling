@@ -43,6 +43,7 @@ data class TerminalScreen(val columns: Int, val rows: Int, val cursorX: Int?, va
     }
 }
 data class TerminalClipboardWrite(val serial: Long,val text: String,val block: String,val connection: Long,val navigation: Long,val local: Boolean=false)
+data class UndoTerminalClose(val serial: Long,val tab: Boolean)
 
 data class AppState(
     val terminalProgress: Map<String,TerminalProgress> = emptyMap(),
@@ -58,6 +59,7 @@ data class AppState(
     val revision: Long = 0, val phase: String = "disconnected", val endpoint: String = "",
     internal val clipboardWrite: TerminalClipboardWrite?=null,
     val identity: String = "", val serverVersion: String = "", val error: String = "", val notice: String = "",
+    val supportsUndoClose: Boolean=false,val undoClose: UndoTerminalClose?=null,
     val sessions: List<SessionItem> = emptyList(), val windows: List<WindowItem> = emptyList(),
     val selectedSession: String = "", val selectedBlock: String = "", val controlled: Boolean = false,
     val screen: TerminalScreen? = null, val creating: Boolean = false, val navigationId: Long = 0,val tabMoveId: Long=0,val paneMoveId: Long=0,val connectionEpoch: Long=0,val otherOwner: Boolean=false,val attentionCount: Int=0,
@@ -94,6 +96,8 @@ data class AppState(
                 endpoint = root.optString("endpoint"), identity = root.optString("identity"),
                 serverVersion=root.optString("serverVersion"),
                 error = root.optString("error"), notice = root.optString("notice"),
+                supportsUndoClose=root.optBoolean("supportsUndoClose"),
+                undoClose=root.optJSONObject("undoClose")?.let {UndoTerminalClose(it.getLong("serial"),it.optBoolean("tab"))},
                 sessions = root.optJSONArray("sessions").objects { value ->
                     val s = value as JSONObject; SessionItem(s.getString("session_id"), s.optString("label", "Session"))
                 },

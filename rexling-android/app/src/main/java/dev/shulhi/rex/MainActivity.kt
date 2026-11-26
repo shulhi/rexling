@@ -55,6 +55,7 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -136,6 +137,7 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
     val window=windows.firstOrNull {w->w.blocks.any {it.id==displayedBlock}} ?: windows.firstOrNull {it.blocks.isNotEmpty()}
     val activeWindowId=window?.id.orEmpty()
     val ready=state.connected && !navigation.pending && !state.creating
+    var dismissedUndo by remember(client) {mutableLongStateOf(0)}
     val keyTarget=client.keyTarget()
     val terminalHaze=remember {HazeState()}
     val workspaceHaze=remember {HazeState()}
@@ -568,6 +570,18 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
                 }
                 model.images.state?.let {status->ImageUploadOverlay(status,model.images::retry,model.images::cancel,
                     modifier=Modifier.align(Alignment.BottomEnd).padding(horizontal=16.dp).padding(bottom=if(state.connected) if(floating.isNotEmpty()) 152.dp else 112.dp else 16.dp),retryable=model.images.retryable,hazeState=terminalHaze)}
+                state.undoClose?.takeIf {ready && !paneObscured && it.serial!=dismissedUndo}?.let {close->
+                    Snackbar(
+                        modifier=Modifier.align(Alignment.BottomCenter).widthIn(max=380.dp).padding(horizontal=12.dp)
+                            .padding(bottom=if(tabLayout.side) 62.dp else 110.dp),
+                        action={TextButton(onClick={client.undoClose(close.serial)},
+                            colors=ButtonDefaults.textButtonColors(contentColor=SnackbarDefaults.actionColor)) {Text("Undo")}},
+                        dismissAction={IconButton(onClick={dismissedUndo=close.serial},
+                            modifier=Modifier.semantics {contentDescription="Dismiss Undo"}) {
+                            ChromeSymbol(ChromeIcon.CLOSE,Modifier.size(18.dp),LocalContentColor.current)
+                        }},
+                    ) {Text(if(close.tab) "Tab closed" else "Pane closed")}
+                }
                 // Loading feedback must not resize the terminal grid during navigation.
                 if(state.creating || navigation.pending)
                     LinearProgressIndicator(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(2.dp))
@@ -699,9 +713,11 @@ private data class TerminalCloseTarget(val session: String,val id: String,val la
     }
     closeTarget?.let {target->
         AlertDialog(onDismissRequest={closeTarget=null},title={Text(if(target.tab) "Close tab?" else "Close pane?")},
-            text={Text(if(target.tab) "Close “${target.label}”? This ends every program in its ${target.blocks.size} pane${if(target.blocks.size==1) "" else "s"}."
+            text={Text(if(state.supportsUndoClose) "Close “${target.label}”? Rex can keep the running programs available briefly for Undo."
+                else if(target.tab) "Close “${target.label}”? This ends every program in its ${target.blocks.size} pane${if(target.blocks.size==1) "" else "s"}."
                 else "Close “${target.label}”? This ends the program running in this pane.")},
             confirmButton={TextButton(enabled=ready,onClick={closeTarget=null
+                menu=false
                 if(target.tab) client.closeTab(target.session,target.id,target.blocks) else client.closePane(target.session,target.id)
             }) {Text("Close",color=MaterialTheme.colorScheme.error)}},
             dismissButton={TextButton(onClick={closeTarget=null}) {Text("Cancel")}})

@@ -37,7 +37,8 @@ signing separately before publishing. SDK paths and caches remain ignored.
 - Swipe the terminal to switch panes, wrapping at the ends. Choose bottom or
   sidebar tabs under **⋮ → Preferences → Tabs**. Use **+** in the sidebar or on
   medium and wide bottom layouts to create a tab. Closing a tab or pane
-  requires confirmation and ends its programs.
+  requires confirmation. On Rex servers with Undo Close (API revision 23 or newer),
+  tap **Undo** shortly after closing to restore the terminal and its running programs.
 - Choose **Multiple panes** under **⋮ → Preferences → Panes** to view up to four
   tiled panes at once on supported full-screen foldables and tablets.
 - Tap the floating pane dock to restore a pane or fan out a group. Tap the
