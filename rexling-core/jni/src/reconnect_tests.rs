@@ -60,6 +60,7 @@ async fn reconnect(
                     response["payload"] = json!({"sessions":[{"session_id":LIVE,"label":"Live"}]})
                 }
                 "server.whoami" => response["payload"] = json!({"principal":{"display":"tester"}}),
+                "server.version" => response["payload"] = json!({"rex_version":"0.1.0-preview.24"}),
                 "session.attach" => match &attach {
                     None => {
                         response["payload"] = json!({"view":{"windows":[{"window_id":"w","layers":[{"kind":"tiled","blocks":[]}]}]}})

@@ -40,7 +40,27 @@ class ServerIconPickerTest {
         ui.onNodeWithContentDescription("Choose server icon").performClick()
         ui.onNode(hasText("MacBook") and hasAnyAncestor(isPopup())).performClick()
         ui.runOnIdle {assertNull(saved);assertEquals(0,closed)}
-        ui.onNodeWithText("Save & connect").performClick()
+        ui.onNodeWithText("Save").performClick()
         ui.runOnIdle {assertEquals(Triple(server.label,server.endpoint,ServerIcon.MACBOOK),saved);assertEquals(1,closed)}
+    }
+    @Test fun reachabilityIsForTheSavedConnectionAndRemovalRequiresConfirmation() {
+        val server=ServerProfile.create("Shipyard","https://shipyard.example","fixture")
+        var removes=0
+        val open=mutableStateOf(true)
+        ui.setContent {RexTheme(false,ThemeCatalog.defaults[1]) {
+            if(open.value) ServerEditor(server,{open.value=false},
+                status=ServerStatus("connected",version="0.1.0-preview.25"),onRemove={removes++}) {_,_,_->null}
+        }}
+        ui.onNodeWithText("Reachable · Rex 0.1.0-preview.25").assertIsDisplayed()
+        ui.onNodeWithText(server.endpoint).performTextReplacement("https://other.example")
+        ui.onNodeWithText("Reachable · Rex 0.1.0-preview.25").assertDoesNotExist()
+        ui.onNodeWithText("Remove server").performScrollTo().performClick()
+        ui.onNodeWithText("Remove server?").assertIsDisplayed()
+        ui.runOnIdle {assertEquals(0,removes)}
+        ui.onNodeWithText("Cancel").performClick()
+        ui.onNodeWithText("Remove server").performScrollTo().performClick()
+        ui.onNodeWithText("Remove").performClick()
+        ui.runOnIdle {assertEquals(1,removes)}
+        ui.onNodeWithText("Edit server").assertDoesNotExist()
     }
 }

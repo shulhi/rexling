@@ -47,7 +47,7 @@ private class DrawerPull(val start: ()->Unit,val move: (Float)->Unit,val finish:
 private val LocalDrawerPull=staticCompositionLocalOf<DrawerPull?> {null}
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable internal fun DrawerSheet(onClose: ()->Unit,animated: Boolean=true,content: @Composable ColumnScope.(() -> Unit)->Unit) {
+@Composable internal fun DrawerSheet(onClose: ()->Unit,animated: Boolean=true,dismissEnabled: Boolean=true,content: @Composable ColumnScope.(() -> Unit)->Unit) {
     val close by rememberUpdatedState(onClose)
     var closing by remember {mutableStateOf(false)}
     var entered by remember {mutableStateOf(!animated)}
@@ -67,11 +67,11 @@ private val LocalDrawerPull=staticCompositionLocalOf<DrawerPull?> {null}
             returning=false
         }
     }
-    val dismiss: ()->Unit={returning=false;closing=true}
+    val dismiss: ()->Unit={if(dismissEnabled) {returning=false;closing=true}}
     val threshold=with(LocalDensity.current) {52.dp.toPx()}
     val pull=DrawerPull(
         start={returning=false},
-        move={delta->if(entered && !closing) dragOffset=(dragOffset+delta).coerceIn(0f,drawerHeight.toFloat())},
+        move={delta->if(dismissEnabled && entered && !closing) dragOffset=(dragOffset+delta).coerceIn(0f,drawerHeight.toFloat())},
         finish={released->
             if(released && dragOffset>=minOf(threshold,drawerHeight*.3f) && dragOffset>0f) dismiss()
             else if(!closing && dragOffset>0f) returning=true
@@ -133,7 +133,7 @@ private val LocalDrawerPull=staticCompositionLocalOf<DrawerPull?> {null}
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun SettingsDrawer(title: String,closeDescription: String,onClose: ()->Unit,
     hazeState: HazeState?=null,onBack: (() -> Unit)?=null,fixed: Boolean=false,backDescription: String="Back to appearance",
-    subtitle: String?=null,surfaceColor: Color=Color.Transparent,headerActions: @Composable RowScope.()->Unit={},content: @Composable ColumnScope.()->Unit) {
+    subtitle: String?=null,surfaceColor: Color=Color.Transparent,showClose: Boolean=true,dismissEnabled: Boolean=true,headerActions: @Composable RowScope.()->Unit={},content: @Composable ColumnScope.()->Unit) {
     val localHaze=remember {HazeState()}
     val shape=BottomSheetDefaults.ExpandedShape
     // Built outside the sheet on purpose: drawerFrost redraws when its host window draws, and inside the
@@ -141,12 +141,12 @@ private val LocalDrawerPull=staticCompositionLocalOf<DrawerPull?> {null}
     val frost=if(!fixed) Modifier.drawerFrost(hazeState,shape)
         else Modifier.paneFrost(hazeState ?: localHaze,shape,edge=false,opacity=.72f,blur=24.dp)
     val surface=if(surfaceColor==Color.Transparent) frost else Modifier.background(surfaceColor,shape).then(frost)
-    DrawerSheet(onClose,animated=!fixed) {dismiss->
+    DrawerSheet(onClose,animated=!fixed,dismissEnabled=dismissEnabled) {dismiss->
         Column(surface.fillMaxWidth()
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
             DrawerHandle(dismiss)
             Row(Modifier.fillMaxWidth().heightIn(min=48.dp).padding(start=16.dp,end=4.dp),verticalAlignment=Alignment.CenterVertically) {
-                onBack?.let {ChromeButton(ChromeIcon.LEFT,backDescription,onClick=it)}
+                onBack?.let {ChromeButton(ChromeIcon.LEFT,backDescription,enabled=dismissEnabled,onClick=it)}
                 Column(Modifier.weight(1f)) {
                     if(subtitle==null) Text(title,style=SettingsType.row,fontWeight=FontWeight.Bold)
                     else {
@@ -156,7 +156,7 @@ private val LocalDrawerPull=staticCompositionLocalOf<DrawerPull?> {null}
                     }
                 }
                 headerActions()
-                ChromeButton(ChromeIcon.CLOSE,closeDescription,onClick=dismiss)
+                if(showClose) ChromeButton(ChromeIcon.CLOSE,closeDescription,enabled=dismissEnabled,onClick=dismiss)
             }
             content()
         }

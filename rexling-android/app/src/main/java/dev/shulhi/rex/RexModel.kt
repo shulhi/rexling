@@ -316,7 +316,7 @@ class RexModel @JvmOverloads constructor(application: Application, preferenceNam
             observers[profile.id]=viewModelScope.launch {
                 client.chromeState.collect {state->
                     val wasConnected=serverStatuses[profile.id]?.connected==true
-                    val next=ServerStatus(state.phase,state.error)
+                    val next=ServerStatus(state.phase,state.error,state.serverVersion)
                     if(serverStatuses[profile.id]!=next) serverStatuses=serverStatuses+(profile.id to next)
 
                     updateSessionTargets()

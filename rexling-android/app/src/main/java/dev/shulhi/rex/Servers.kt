@@ -55,7 +55,7 @@ object SavedServers {
     fun encode(servers: List<ServerProfile>): String = JSONArray(servers.map {JSONObject().put("id",it.id).put("label",it.label).put("endpoint",it.endpoint).put("icon",it.icon.key)}).toString()
 }
 
-data class ServerStatus(val phase: String="disconnected",val error: String="") {
+data class ServerStatus(val phase: String="disconnected",val error: String="",val version: String="") {
     val connected: Boolean get()=phase=="connected"
     val maintained: Boolean get()=phase in listOf("connected","connecting","reconnecting","paused")
 }

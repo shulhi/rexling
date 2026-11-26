@@ -347,6 +347,8 @@ struct Actor {
     data_resume: Option<Resume>,
     phase: String,
     identity: String,
+    server_version: String,
+    server_version_reply: Option<ProgramTask>,
     error: String,
     notice: String,
     progress_reports: BTreeMap<String,Value>,
@@ -422,6 +424,8 @@ impl Actor {
             data_resume: None,
             phase: "disconnected".into(),
             identity: String::new(),
+            server_version: String::new(),
+            server_version_reply: None,
             error: String::new(),
             notice: String::new(),
             progress_reports:BTreeMap::new(),
@@ -483,6 +487,7 @@ impl Actor {
                 "terminalProgress":crate::progress::selected(&self.progress_reports,&self.selected_session),"identity":self.identity,"error":self.error,"notice":self.notice,"clipboard":self.clipboard,"sessions":self.sessions,
                 "mirrorWaiting":self.mirror_waiting,"windows":self.windows,"selectedSession":self.selected_session,"staleSession":self.stale_session,
                 "awaitingPaneSelection":self.awaiting_pane_selection,
+                "serverVersion":self.server_version,
                 "selectedBlock":self.selected_block,"navigationId":self.navigation_id,"tabMoveId":self.tab_move_id,"paneMoveId":self.pane_move_id,"connectionEpoch":self.connection_epoch,"otherOwner":self.other_owner,"controlled":self.controlled,"creating":self.creating,"sessionDetails":self.session_details,"paneCatalog":self.pane_catalog,"paneCatalogLoading":self.pane_catalog_task.is_some(),"programs":self.programs,"directories":self.directories,"titles":self.titles,"working":self.working,"activityError":self.activity_error,"activityPartial":self.activity_partial,"activityLoading":(self.activity_open || self.monitoring) && (self.activity_task.is_some() || self.activity_full),"attentionCount":self.attention_count}).to_string();
             shared
                 .pending_previews
@@ -572,6 +577,17 @@ impl Actor {
                                 let _=self.commands.push(json!({"type":"refresh"}),&self.input_target());self.publish();
                             }
                         } else if ack.target.connection==self.connection_epoch {self.recover(error);self.notice="Request outcome is uncertain; input was not resent".into();self.publish();}
+                    }
+                },
+                result=async {match &mut self.server_version_reply {
+                    Some(reply)=>reply.await,None=>pending().await
+                }}=>{
+                    self.server_version_reply = None;
+                    if let Ok(version) = result
+                        && let Some(version) = version["rex_version"].as_str()
+                        && !version.trim().is_empty() {
+                        self.server_version = version.trim().chars().filter(|c| !c.is_control()).take(100).collect();
+                        self.publish();
                     }
                 },
                 result=async {match &mut self.connect_task {Some(task)=>task.await,None=>pending().await}}=>{
@@ -743,6 +759,8 @@ impl Actor {
         }
     }
     async fn disconnect(&mut self) {
+        self.server_version.clear();
+        self.server_version_reply = None;
         let _ = tokio::time::timeout(Duration::from_secs(2), self.release_session_panes()).await;
         self.close_retained_floating().await;
         self.awaiting_pane_selection = false;
@@ -773,6 +791,8 @@ impl Actor {
         self.owned_blocks.clear();
     }
     fn lose_connections(&mut self) {
+        self.server_version.clear();
+        self.server_version_reply = None;
         self.owned_blocks.clear();
         self.retained_floating=None;
         self.mirror.clear();
@@ -866,6 +886,10 @@ impl Actor {
             .as_str()
             .unwrap_or("Connected")
             .to_owned();
+        // Version is supplementary metadata. Don't wait for it before opening a pane.
+        if !self.monitoring && let Ok(reply) = control.start_call("server.version", json!({})).await {
+            self.server_version_reply = Some(Box::pin(reply.receive()));
+        }
         self.control = Some(control);
         self.phase = "connected".into();self.connection_epoch=self.connection_epoch.wrapping_add(1);
         self.awaiting_pane_selection = false;

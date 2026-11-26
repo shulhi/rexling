@@ -57,7 +57,7 @@ data class AppState(
     internal val paneCatalog: PaneCatalogSnapshot? = null, internal val paneCatalogLoading: Boolean = false,
     val revision: Long = 0, val phase: String = "disconnected", val endpoint: String = "",
     internal val clipboardWrite: TerminalClipboardWrite?=null,
-    val identity: String = "", val error: String = "", val notice: String = "",
+    val identity: String = "", val serverVersion: String = "", val error: String = "", val notice: String = "",
     val sessions: List<SessionItem> = emptyList(), val windows: List<WindowItem> = emptyList(),
     val selectedSession: String = "", val selectedBlock: String = "", val controlled: Boolean = false,
     val screen: TerminalScreen? = null, val creating: Boolean = false, val navigationId: Long = 0,val tabMoveId: Long=0,val paneMoveId: Long=0,val connectionEpoch: Long=0,val otherOwner: Boolean=false,val attentionCount: Int=0,
@@ -92,6 +92,7 @@ data class AppState(
                 revision = root.optLong("revision"), navigationId = root.optLong("navigationId"),tabMoveId=root.optLong("tabMoveId"),paneMoveId=root.optLong("paneMoveId"),connectionEpoch=root.optLong("connectionEpoch"),otherOwner=root.optBoolean("otherOwner"),attentionCount=root.optInt("attentionCount").coerceIn(0,1024), phase = root.optString("phase", "disconnected"),
                 clipboardWrite=root.optJSONObject("clipboard")?.let {TerminalClipboardWrite(it.optLong("serial"),it.optString("text"),it.optString("block"),it.optLong("connection"),it.optLong("navigation"),it.optBoolean("local"))},
                 endpoint = root.optString("endpoint"), identity = root.optString("identity"),
+                serverVersion=root.optString("serverVersion"),
                 error = root.optString("error"), notice = root.optString("notice"),
                 sessions = root.optJSONArray("sessions").objects { value ->
                     val s = value as JSONObject; SessionItem(s.getString("session_id"), s.optString("label", "Session"))

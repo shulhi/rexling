@@ -86,7 +86,7 @@ class NetworkUiTest {
         var editor by mutableStateOf(false)
         compose.setContent {RexTheme(dark,ThemeCatalog.defaults[if(dark) 0 else 1]) {
             EmptyServerContent {editor=true}
-            if(editor) ServerEditor(null,{editor=false}, {_,_,_->null})
+            if(editor) ServerEditor(null,{editor=false}) {_,_,_->null}
         }}
         compose.onNodeWithText("Add server").performClick()
         compose.onNodeWithText("Connection network").assertDoesNotExist()
@@ -181,7 +181,7 @@ class NetworkUiTest {
         compose.runOnIdle {assertEquals(0,continued)}
     }
     @Test fun sshEditorOffersKeyImportAndKeylessConnection() {
-        compose.setContent {MaterialTheme {ServerEditor(ServerProfile.create("Test SSH","ssh://tester@example.com"),{}, {_,_,_->null})}}
+        compose.setContent {MaterialTheme {ServerEditor(ServerProfile.create("Test SSH","ssh://tester@example.com"),{}) {_,_,_->null}}}
         compose.onNodeWithText("Import new key").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("No key").assertIsDisplayed()
         compose.waitForIdle()

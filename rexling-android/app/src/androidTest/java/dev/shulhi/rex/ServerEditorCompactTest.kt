@@ -21,17 +21,16 @@ class ServerEditorCompactTest {
         var dark by mutableStateOf(false)
         try {
             ui.setContent {RexTheme(dark,ThemeCatalog.defaults[if(dark) 0 else 1]) {
-                ServerEditor(ServerProfile.create("Shipyard 2",endpoint),{}, {_,_,_->null})
+                ServerEditor(ServerProfile.create("Shipyard 2",endpoint),{},onRemove={}) {_,_,_->null}
             }}
             for(value in listOf(false,true)) {
                 ui.runOnIdle {dark=value}
-                ui.onNodeWithText("Remove").assertIsDisplayed();ui.onNodeWithText("Save & connect").assertIsDisplayed()
-                val file=ui.onNodeWithText("Import file").fetchSemanticsNode().boundsInRoot
-                val paste=ui.onNodeWithText("Paste key").fetchSemanticsNode().boundsInRoot
-                val remove=ui.onNodeWithText("Remove").fetchSemanticsNode().boundsInRoot
-                assertEquals(file.center.y,paste.center.y,2f);assertEquals(file.center.y,remove.center.y,2f)
-                assertTrue(paste.left>=file.right);assertTrue(remove.left>=paste.right)
-                ui.onNodeWithContentDescription("Choose server icon").assertIsDisplayed()
+                ui.onNodeWithText("Remove server").performScrollTo().assertIsDisplayed();ui.onNodeWithText("Save").assertIsDisplayed()
+                val file=ui.onNodeWithText("Import new key").fetchSemanticsNode().boundsInRoot
+                val paste=ui.onNodeWithText("Paste new key").fetchSemanticsNode().boundsInRoot
+                assertEquals(file.center.y,paste.center.y,2f)
+                assertTrue(file.left>=paste.right)
+                ui.onNodeWithContentDescription("Choose server icon").performScrollTo().assertIsDisplayed()
                 val instrumentation=InstrumentationRegistry.getInstrumentation();ui.waitForIdle();instrumentation.waitForIdleSync();Thread.sleep(300)
                 File(instrumentation.targetContext.cacheDir,"server-editor-compact-${if(value) "dark" else "light"}.png").outputStream().use {
                     instrumentation.uiAutomation.takeScreenshot().compress(Bitmap.CompressFormat.PNG,100,it)

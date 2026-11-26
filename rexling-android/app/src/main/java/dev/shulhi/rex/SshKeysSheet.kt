@@ -29,7 +29,7 @@ import kotlinx.coroutines.withContext
 
 private enum class KeySource { PASTE,FILE }
 
-@Composable internal fun SshKeyEditor(selected: String?,onSelected: (String?)->Unit) {
+@Composable internal fun SshKeyEditor(selected: String?,enabled: Boolean=true,onSelected: (String?)->Unit) {
     val keys by NetworkSettings.sshKeys.collectAsState()
     val key=keys.firstOrNull {it.id==selected}
     var expanded by remember {mutableStateOf(false)}
@@ -37,7 +37,7 @@ private enum class KeySource { PASTE,FILE }
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha=.5f)).padding(12.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
         Text("SSH key",style=SettingsType.detail,color=MaterialTheme.colorScheme.onSurfaceVariant)
         Box {
-            TextButton(onClick={expanded=true},contentPadding=PaddingValues(0.dp)) {
+            TextButton(enabled=enabled,onClick={expanded=true},contentPadding=PaddingValues(0.dp)) {
                 Text(key?.name ?: "No key",style=SettingsType.row,maxLines=1,overflow=TextOverflow.Ellipsis)
                 Spacer(Modifier.width(6.dp));ChromeSymbol(ChromeIcon.CHEVRON,Modifier.size(14.dp))
             }
@@ -51,8 +51,8 @@ private enum class KeySource { PASTE,FILE }
         }
         Text(if(key==null) "Connect without a key when the host supports it." else key.fingerprint.ifBlank {"Saved securely on this phone"},style=SettingsType.detail,color=MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement=Arrangement.spacedBy(4.dp)) {
-            TextButton(onClick={source=KeySource.PASTE},contentPadding=PaddingValues(horizontal=6.dp,vertical=4.dp)) {Text("Paste new key",style=SettingsType.detail)}
-            TextButton(onClick={source=KeySource.FILE},contentPadding=PaddingValues(horizontal=6.dp,vertical=4.dp)) {Text("Import new key",style=SettingsType.detail)}
+            TextButton(enabled=enabled,onClick={source=KeySource.PASTE},contentPadding=PaddingValues(horizontal=6.dp,vertical=4.dp)) {Text("Paste new key",style=SettingsType.detail)}
+            TextButton(enabled=enabled,onClick={source=KeySource.FILE},contentPadding=PaddingValues(horizontal=6.dp,vertical=4.dp)) {Text("Import new key",style=SettingsType.detail)}
         }
     }
     source?.let {mode->SshKeyImportDialog(mode,{source=null}) {id->onSelected(id);source=null}}
